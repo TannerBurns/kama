@@ -1,0 +1,156 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish signed OCI artifacts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    env:
+      MANAGER_IMAGE: ghcr.io/tannerburns/kama-manager
+      FIXTURES_IMAGE: ghcr.io/tannerburns/kama-test-fixtures
+      CHART_REPOSITORY: ghcr.io/tannerburns/charts
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install pinned release tools
+        run: make bootstrap supply-chain-tools
+
+      - name: Validate release tag and source
+        id: metadata
+        shell: bash
+        run: |
+          version="$(tr -d '\r\n' < VERSION)"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+          created="$(git show -s --format=%cI HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "created=${created}" >> "${GITHUB_OUTPUT}"
+          echo "epoch=${epoch}" >> "${GITHUB_OUTPUT}"
+          RELEASE_TAG="${GITHUB_REF_NAME}" make release-check
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish manager image
+        id: manager
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.MANAGER_IMAGE }}:${{ steps.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
+          provenance: mode=max
+
+      - name: Build and publish fixture image
+        id: fixtures
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.test-fixtures
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.FIXTURES_IMAGE }}:${{ steps.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
+          provenance: mode=max
+
+      - name: Package and publish Helm chart
+        id: chart
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          make helm-package
+          printf '%s' "${GH_TOKEN}" | ./bin/helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
+          output="$(./bin/helm push "dist/kama-${{ steps.metadata.outputs.version }}.tgz" "oci://${CHART_REPOSITORY}" 2>&1)"
+          printf '%s\n' "${output}"
+          digest="$(printf '%s\n' "${output}" | awk '$1 == "Digest:" {print $2}' | tail -n 1)"
+          if [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "could not determine pushed chart digest" >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Generate SPDX SBOMs
+        shell: bash
+        run: |
+          mkdir -p dist/sbom
+          ./bin/syft "registry:${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}" \
+            --output spdx-json=dist/sbom/kama-manager.spdx.json
+          ./bin/syft "registry:${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}" \
+            --output spdx-json=dist/sbom/kama-test-fixtures.spdx.json
+          ./bin/syft "file:dist/kama-${{ steps.metadata.outputs.version }}.tgz" \
+            --output spdx-json=dist/sbom/kama-chart.spdx.json
+
+      - name: Sign immutable digests and attach SBOM attestations
+        shell: bash
+        env:
+          COSIGN_YES: "true"
+        run: |
+          manager_ref="${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}"
+          fixtures_ref="${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}"
+          chart_ref="${CHART_REPOSITORY}/kama@${{ steps.chart.outputs.digest }}"
+
+          ./bin/cosign sign "${manager_ref}"
+          ./bin/cosign sign "${fixtures_ref}"
+          ./bin/cosign sign "${chart_ref}"
+
+          ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-manager.spdx.json "${manager_ref}"
+          ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-test-fixtures.spdx.json "${fixtures_ref}"
+          ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-chart.spdx.json "${chart_ref}"
+
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ steps.metadata.outputs.version }}
+          path: |
+            dist/kama-*.tgz
+            dist/sbom/*.spdx.json
+          if-no-files-found: error
+          retention-days: 90

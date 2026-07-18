@@ -1,0 +1,14 @@
+{{- if and .Values.rbac.create .Values.metrics.enabled .Values.metrics.secure }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kama.clusterScopedName" . }}-metrics-reader
+  labels:
+    {{- include "kama.labels" . | nindent 4 }}
+    kama.tannerburns.github.io/release-namespace: {{ .Release.Namespace | quote }}
+rules:
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+{{- end }}

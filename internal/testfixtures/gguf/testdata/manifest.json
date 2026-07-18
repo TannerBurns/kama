@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "description": "Project-owned synthetic GGUF v3 metadata fixtures with no tensors or model weights.",
+  "encoding": "base64",
+  "fixtures": [
+    {
+      "name": "valid-minimal",
+      "file": "valid-minimal.gguf.b64",
+      "decodedFile": "valid-minimal.gguf",
+      "sha256": "0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94",
+      "valid": true,
+      "expected": {
+        "version": 3,
+        "tensorCount": 0,
+        "metadataCount": 4,
+        "metadataKeys": [
+          "general.architecture",
+          "general.name",
+          "general.file_type",
+          "kama.fixture"
+        ]
+      }
+    },
+    {
+      "name": "sharded-metadata",
+      "file": "sharded-metadata.gguf.b64",
+      "decodedFile": "sharded-metadata.gguf",
+      "sha256": "504124ce564d5307e779d4944e5b34219df49fcd9d77b0ee92ea9ecd1daac253",
+      "valid": true,
+      "expected": {
+        "version": 3,
+        "tensorCount": 0,
+        "metadataCount": 6,
+        "metadataKeys": [
+          "general.architecture",
+          "general.name",
+          "split.no",
+          "split.count",
+          "split.tensors.count",
+          "kama.fixture"
+        ]
+      }
+    },
+    {
+      "name": "malformed-magic",
+      "file": "malformed-magic.gguf.b64",
+      "decodedFile": "malformed-magic.gguf",
+      "sha256": "14ede53f29ea45d216b88bc788c6ff9c9c20c83475111e68b9ddfae299914c97",
+      "valid": false,
+      "expectedError": "invalid GGUF magic"
+    },
+    {
+      "name": "truncated-metadata",
+      "file": "truncated-metadata.gguf.b64",
+      "decodedFile": "truncated-metadata.gguf",
+      "sha256": "10c418c12c870f8c9fa1b7afb6eaaeedfe5da3a6530b5cd53f9c356c46bcaa3b",
+      "valid": false,
+      "expectedError": "unexpected EOF"
+    }
+  ]
+}

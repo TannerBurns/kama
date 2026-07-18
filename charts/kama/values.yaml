@@ -1,0 +1,90 @@
+replicaCount: 1
+revisionHistoryLimit: 3
+
+image:
+  repository: ghcr.io/tannerburns/kama-manager
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  # When set, digest takes precedence over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+rbac:
+  # M0 grants namespaced Lease/event permissions and, when secure metrics are
+  # enabled, TokenReview/SubjectAccessReview permissions.
+  create: true
+
+leaderElection:
+  enabled: true
+
+metrics:
+  enabled: false
+  secure: true
+  port: 8443
+
+health:
+  port: 8081
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+livenessProbe:
+  initialDelaySeconds: 15
+  periodSeconds: 20
+  timeoutSeconds: 1
+  failureThreshold: 3
+
+readinessProbe:
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 1
+  failureThreshold: 3
+
+terminationGracePeriodSeconds: 10
+
+extraArgs: []
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+priorityClassName: ""

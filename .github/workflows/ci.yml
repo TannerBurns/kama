@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality and policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned tools
+        run: make bootstrap
+
+      - name: Check formatting, vet, and lint
+        run: make fmt-check vet lint
+
+      - name: Check generated files
+        run: make verify-generated
+
+      - name: Check vulnerability, license, workflow, and chart policy
+        run: make vuln-check license-check workflow-check helm-validate
+
+      - name: Check release metadata
+        run: make release-check
+
+  tests:
+    name: Race and envtest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned tools
+        run: make bootstrap
+
+      - name: Run race-enabled unit tests
+        run: make test
+
+      - name: Run race-enabled envtest
+        run: make test-envtest
+
+  packaging:
+    name: Images, chart, and SBOMs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      IMG: local/kama-manager:ci
+      FIXTURES_IMG: local/kama-test-fixtures:ci
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install pinned tools
+        run: make bootstrap
+
+      - name: Build manager and fixture images
+        run: make container
+
+      - name: Package Helm chart
+        run: make helm-package
+
+      - name: Verify image and chart versions
+        env:
+          CHECK_IMAGES: "1"
+        run: bash hack/release-check.sh
+
+      - name: Generate SPDX SBOMs
+        run: make sbom
+
+      - name: Upload supply-chain artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m0-supply-chain-${{ github.sha }}
+          path: |
+            dist/kama-*.tgz
+            dist/sbom/*.spdx.json
+          if-no-files-found: error
+          retention-days: 14

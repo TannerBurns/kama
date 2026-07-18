@@ -1,0 +1,226 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kama-external-scaler
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-external-scaler
+    app.kubernetes.io/instance: kind
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kama-external-scaler
+      app.kubernetes.io/instance: kind
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kama-external-scaler
+        app.kubernetes.io/instance: kind
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: scaler
+          image: KAMA_FIXTURES_IMAGE
+          imagePullPolicy: Never
+          command:
+            - /external-scaler
+          args:
+            - --listen-address=:6000
+            - --control-address=:8082
+            - --initial-metric=0
+            - --target-size=1
+            - --metric-name=kama_pending_requests
+          ports:
+            - name: grpc
+              containerPort: 6000
+            - name: control
+              containerPort: 8082
+          readinessProbe:
+            httpGet:
+              path: /state
+              port: control
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kama-external-scaler
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-external-scaler
+    app.kubernetes.io/instance: kind
+spec:
+  selector:
+    app.kubernetes.io/name: kama-external-scaler
+    app.kubernetes.io/instance: kind
+  ports:
+    - name: grpc
+      port: 6000
+      targetPort: grpc
+    - name: control
+      port: 8082
+      targetPort: control
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kama-fake-llama
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-fake-llama
+    app.kubernetes.io/instance: kind
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kama-fake-llama
+      app.kubernetes.io/instance: kind
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kama-fake-llama
+        app.kubernetes.io/instance: kind
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: KAMA_FIXTURES_IMAGE
+          imagePullPolicy: Never
+          args:
+            - --listen-address=:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kama-fake-llama
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-fake-llama
+    app.kubernetes.io/instance: kind
+spec:
+  selector:
+    app.kubernetes.io/name: kama-fake-llama
+    app.kubernetes.io/instance: kind
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kama-activation-target
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-activation-target
+    app.kubernetes.io/instance: kind
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kama-activation-target
+      app.kubernetes.io/instance: kind
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kama-activation-target
+        app.kubernetes.io/instance: kind
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: target
+          image: KAMA_FIXTURES_IMAGE
+          imagePullPolicy: Never
+          args:
+            - --listen-address=:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: kama-external-scaler
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-external-scaler
+    app.kubernetes.io/instance: kind
+spec:
+  scaleTargetRef:
+    name: kama-activation-target
+  pollingInterval: 1
+  cooldownPeriod: 5
+  minReplicaCount: 0
+  maxReplicaCount: 1
+  triggers:
+    - type: external-push
+      metadata:
+        scalerAddress: kama-external-scaler.kama-system.svc.cluster.local:6000

@@ -1,0 +1,17 @@
+apiVersion: v2
+name: kama
+description: Kubernetes operator for lifecycle management of local and remote AI model serving
+type: application
+version: "0.0.0"
+appVersion: "0.0.0"
+kubeVersion: ">=1.34.0-0"
+home: https://github.com/TannerBurns/kama
+sources:
+  - https://github.com/TannerBurns/kama
+maintainers:
+  - name: Tanner Burns
+    url: https://github.com/TannerBurns
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "true"
+  org.opencontainers.image.source: https://github.com/TannerBurns/kama
