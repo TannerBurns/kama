@@ -50,7 +50,7 @@ their original validation IDs remain traceable.
 | ID | Resolution | Decision evidence / remaining gate |
 |---|---|---|
 | O001 | Use Go module `github.com/TannerBurns/kama` and permanent API group `kama.tannerburns.github.io`. | Resolved by [ADR-0001](../adr/0001-project-identity.md). |
-| O002 | Require KEDA 2.20.0 or newer. | Resolved by [ADR-0002](../adr/0002-dependency-and-version-policy.md). The Kubernetes 1.36 activation test remains an M0 completion gate; this entry does not claim it has passed. |
+| O002 | Require KEDA 2.20.0 or newer. | Resolved by [ADR-0002](../adr/0002-dependency-and-version-policy.md). KEDA 2.20.0 external-push activation and the full Kama install/uninstall smoke passed on Kubernetes 1.36 in the [M0 compatibility job](https://github.com/TannerBurns/kama/actions/runs/29665843277/job/88136002619) at the [verified commit](https://github.com/TannerBurns/kama/commit/ef63e791a7435092ce04dd77f8c556c1993735a7). |
 
 ## Open validation items
 

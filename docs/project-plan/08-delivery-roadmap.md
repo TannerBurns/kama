@@ -24,20 +24,29 @@ Hardening and v1 release
 
 ## M0 - Repository and engineering foundation
 
+**Status: Complete (2026-07-18).**
+
+Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commit/ef63e791a7435092ce04dd77f8c556c1993735a7),
+[passing CI run](https://github.com/TannerBurns/kama/actions/runs/29665843344), and
+[passing Kubernetes 1.34-1.36 Kind matrix](https://github.com/TannerBurns/kama/actions/runs/29665843277).
+
 ### Deliverables
 
-- Initialize Git, Apache-2.0 license, Go module, Kubebuilder/controller-runtime
+- [x] Initialize Git, Apache-2.0 license, Go module, Kubebuilder/controller-runtime
   project, Makefile/task entrypoints, and contribution/security documentation.
-- Establish API generation, linting, unit/envtest, container builds, Helm packaging,
-  SBOM/signing hooks, and CI.
-- Create a fake llama-server and fixture GGUF metadata for non-GPU tests.
-- Write ADRs for the API group/domain, dependency/version policy, and image layout.
+- [x] Establish API generation, linting, unit/envtest, container builds, Helm
+  packaging, SBOM generation, signing/attestation hooks, and CI. Artifact publication
+  remains a release-time action and was not counted as completed.
+- [x] Create a fake llama-server, KEDA external-scaler fixture, and project-owned
+  synthetic GGUF metadata for non-GPU tests.
+- [x] Write ADRs for the API group/domain, dependency/version policy, and artifact
+  layout.
 
 ### Definition of done
 
-- A generated empty operator installs/uninstalls on every target Kubernetes minor.
-- CI reproduces code generation and rejects uncommitted generated changes.
-- Images and chart are versioned from one release metadata source.
+- [x] A generated empty operator installs/uninstalls on every target Kubernetes minor.
+- [x] CI reproduces code generation and rejects uncommitted generated changes.
+- [x] Images and chart are versioned from one release metadata source.
 
 ## M1 - Persistent artifact plane
 
