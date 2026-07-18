@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.5
 
 require (
-	github.com/kedacore/keda/v2 v2.20.0
+	github.com/kedacore/keda/v2 v2.20.1
 	google.golang.org/grpc v1.81.1
 	k8s.io/apimachinery v0.36.0
 	k8s.io/client-go v0.36.0
