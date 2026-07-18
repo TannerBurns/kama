@@ -56,9 +56,11 @@ jobs:
           fi
           created="$(git show -s --format=%cI HEAD)"
           epoch="$(git show -s --format=%ct HEAD)"
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "created=${created}" >> "${GITHUB_OUTPUT}"
-          echo "epoch=${epoch}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "version=${version}"
+            echo "created=${created}"
+            echo "epoch=${epoch}"
+          } >> "${GITHUB_OUTPUT}"
           RELEASE_TAG="${GITHUB_REF_NAME}" make release-check
 
       - name: Log in to GHCR
