@@ -50,10 +50,10 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 
 ## M1 - Persistent artifact plane
 
-**Status: In Progress.** The repository-scoped implementation deliverables are
-complete. That is not milestone acceptance: immutable fixture-backed Kind results and
-the strict live Hugging Face/CSI evidence remain pending, so every definition-of-done
-item below stays unchecked.
+**Status: In Progress.** The repository-scoped implementation deliverables and
+fixture-backed CI/Kind gates are complete. That is not milestone acceptance: the
+strict live Hugging Face/production-CSI evidence remains pending, so every
+definition-of-done item below stays unchecked.
 
 ### Deliverables
 
