@@ -76,6 +76,44 @@ wait_for_condition() {
     --for="condition=${condition}=True" "${resource}/${name}" --timeout="${timeout}"
 }
 
+wait_for_admission() {
+  local rollout_context=$1
+  local attempt
+  local admission_log="${tmp_dir}/admission-readiness.log"
+
+  # A failed request may consume the 10-second webhook timeout. Eight attempts
+  # keep the convergence window bounded below two minutes. Retry only transport
+  # failures; admission denials, RBAC errors, and schema errors fail immediately.
+  for attempt in $(seq 1 8); do
+    if "${kubectl_bin}" -n "${namespace}" create --dry-run=server -f - \
+      >/dev/null 2>"${admission_log}" <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: admission-routing-readiness
+spec:
+  storage:
+    existingClaim:
+      name: admission-only
+EOF
+    then
+      return 0
+    fi
+    if ! grep -Eq \
+      'failed calling webhook|no endpoints available|connection refused|context deadline exceeded|TLS handshake timeout' \
+      "${admission_log}"; then
+      break
+    fi
+    if [[ ${attempt} -lt 8 ]]; then
+      sleep 2
+    fi
+  done
+
+  echo "admission did not become reachable after ${rollout_context}:" >&2
+  sed -n '1,20p' "${admission_log}" >&2
+  return 1
+}
+
 if "${kind_bin}" get clusters | grep -Fxq "${cluster_name}"; then
   echo "Kind cluster ${cluster_name} already exists; choose a disposable KIND_CLUSTER" >&2
   exit 1
@@ -207,6 +245,7 @@ fi
   crd/modelcaches.kama.tannerburns.github.io \
   crd/modelartifacts.kama.tannerburns.github.io \
   --timeout=60s
+wait_for_admission "the initial manager rollout"
 
 manager_service_account="system:serviceaccount:${namespace}:kama"
 for verb in patch update; do
@@ -307,33 +346,7 @@ if [[ -z "${initial_webhook_leaf}" ]] || [[ "${upgraded_webhook_leaf}" == "${ini
   echo "Helm upgrade did not refresh the webhook serving certificate" >&2
   exit 1
 fi
-post_upgrade_admission_ready=0
-post_upgrade_admission_log="${tmp_dir}/post-upgrade-admission.log"
-# A failed request may consume the 10-second webhook timeout. Eight attempts
-# keep the convergence window bounded below two minutes.
-for _ in $(seq 1 8); do
-  if "${kubectl_bin}" -n "${namespace}" create --dry-run=server -f - \
-    >/dev/null 2>"${post_upgrade_admission_log}" <<'EOF'
-apiVersion: kama.tannerburns.github.io/v1alpha1
-kind: ModelCache
-metadata:
-  name: admission-after-certificate-upgrade
-spec:
-  storage:
-    existingClaim:
-      name: admission-only
-EOF
-  then
-    post_upgrade_admission_ready=1
-    break
-  fi
-  sleep 2
-done
-if [[ ${post_upgrade_admission_ready} -ne 1 ]]; then
-  echo "admission did not recover after the webhook certificate-refresh rollout:" >&2
-  sed -n '1,20p' "${post_upgrade_admission_log}" >&2
-  exit 1
-fi
+wait_for_admission "the webhook certificate-refresh rollout"
 
 "${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-cache.yaml"
 wait_for_condition modelcache kind-cache Ready 5m
@@ -412,6 +425,7 @@ fi
 
 "${kubectl_bin}" -n "${namespace}" rollout restart deployment/kama
 "${kubectl_bin}" -n "${namespace}" rollout status deployment/kama --timeout=2m
+wait_for_admission "the explicit manager restart"
 wait_for_condition modelartifact kind-public Ready 2m
 wait_for_condition modelartifact kind-private Ready 2m
 post_restart_state="$(curl --fail --silent --show-error http://127.0.0.1:18083/state)"
