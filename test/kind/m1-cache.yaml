@@ -1,0 +1,17 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: kind-cache
+  namespace: kama-system
+spec:
+  retentionPolicy: Retain
+  storage:
+    claimTemplate:
+      spec:
+        storageClassName: kama-cache-local
+        accessModes:
+          - ReadWriteOnce
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: 100Mi

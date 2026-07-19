@@ -136,7 +136,9 @@ backend connect, TTFT, and completion without prompt content.
 
 ## Required runbooks
 
-- Artifact import stuck, source unauthorized, checksum mismatch, and cache full.
+- [Artifact import and storage recovery](../runbooks/artifact-import-and-recovery.md):
+  stuck imports, source authorization, checksum/shard failures, cache full, snapshots,
+  retained claims, and the `Direct` `ValidatedOnce` contract.
 - Model cannot fit RAM/VRAM or repeatedly fails load.
 - GPU Pod remains unschedulable or falls back to CPU.
 - Cold start exceeds timeout or KEDA cannot activate a pool.

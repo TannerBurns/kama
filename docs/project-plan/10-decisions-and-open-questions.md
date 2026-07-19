@@ -27,6 +27,11 @@ revisited through an ADR before their dependent milestone begins.
 | D015 | Automatic fallback may use hybrid CPU/GPU and CPU-only. | Maximizes availability; fallback warns and must fit combined RAM/VRAM. |
 | D016 | The gateway publicly proxies inference/streaming APIs; lifecycle/admin APIs remain internal. | Preserves llama-server client behavior without conflicting control planes. |
 | D017 | KEDA is a required v1 autoscaling dependency. | Provides Kubernetes-native scale-to-zero and replica management. |
+| D018 | M1 uses a shared content-addressed filesystem cache per namespace/cache class, and manual PVC `Copy` is the default. | Avoids duplicate downloads while isolating serving from mutable source claims; accepted from A005 by [ADR-0004](../adr/0004-persistent-artifact-plane.md). |
+| D019 | Dedicated per-artifact managed claims are deferred beyond M1. | Shared-cache lifecycle is sufficient for M1; CSI clone and isolation profiles need later evidence. |
+| D020 | `Retain` is the default; adopted claims are never deleted, and `Delete` applies only to an unreferenced controller-created claim with matching ownership identity. | Prevents control-plane removal or a forged reference from deleting user data. |
+| D021 | One cluster-wide manager watches namespaced artifact resources and all object references remain same-namespace names. | Centralizes operation while preserving Kubernetes RBAC and tenant boundaries. |
+| D022 | The Helm release owns webhook TLS, preserves its CA across upgrades, refreshes the leaf, and installs fail-closed webhooks without requiring cert-manager. | Makes the default installation self-contained and maintains a stable admission trust root. |
 
 ## Assumed implementation defaults
 
@@ -36,7 +41,6 @@ revisited through an ADR before their dependent milestone begins.
 | A002 | Expose high-level runtime intent with guarded expert overrides. | M2 API freeze |
 | A003 | Context, desired concurrency, KV precision, and artifact quantization are hard constraints; never silently shrink them. | M3 planner freeze |
 | A004 | Use `split-mode=layer` for production same-node multi-GPU; tensor mode is feature-gated and profile-only. | M3 hardware validation |
-| A005 | Shared content-addressed RWX cache per namespace/cache class; `Copy` is the default manual-PVC policy. | M1 storage validation |
 | A006 | Queue defaults: 100 requests per model, 10-minute cold-start timeout, 10-minute idle cooldown; all are configurable. | M4/M5 load testing |
 | A007 | Balanced scoring uses an equal-weight harmonic mean of normalized throughput and inverse p95 latency, tied by fewer GPUs/RAM. | M3 profiling study |
 | A008 | Gateway queues remain in-memory and do not persist prompts. | M4 security/design review |
@@ -51,14 +55,14 @@ their original validation IDs remain traceable.
 |---|---|---|
 | O001 | Use Go module `github.com/TannerBurns/kama` and permanent API group `kama.tannerburns.github.io`. | Resolved by [ADR-0001](../adr/0001-project-identity.md). |
 | O002 | Require KEDA 2.20.0 or newer. | Resolved by [ADR-0002](../adr/0002-dependency-and-version-policy.md). KEDA 2.20.0 external-push activation and the full Kama install/uninstall smoke passed on Kubernetes 1.36 in the [M0 compatibility job](https://github.com/TannerBurns/kama/actions/runs/29665843277/job/88136002619) at the [verified commit](https://github.com/TannerBurns/kama/commit/ef63e791a7435092ce04dd77f8c556c1993735a7). |
+| O004 | Require the M1 functional filesystem floor (`mmap`, durable `fsync`, atomic rename, read-only remount, capacity reporting, and restart recovery); qualify throughput per CSI rather than claiming a universal SLA. | Resolved by [ADR-0004](../adr/0004-persistent-artifact-plane.md). Live CSI results remain explicitly pending in [storage qualification](../storage-qualification.md) and are required before a production storage support claim. |
+| O005 | Ship the shared cache in M1 and defer dedicated per-artifact managed claims. | Resolved by [ADR-0004](../adr/0004-persistent-artifact-plane.md); a later storage profile requires lifecycle and CSI-clone evidence. |
 
 ## Open validation items
 
 | ID | Item | Default until resolved | Blocking milestone |
 |---|---|---|---|
 | O003 | Default context, concurrency, KV types, queue body limit, and placement timeout. | Use conservative runtime defaults; publish measured tuning before beta. | M2-M5 |
-| O004 | Reference RWX storage classes and performance floor. | Require POSIX filesystem semantics and publish tested configurations rather than naming an untested universal default. | M1/M6 |
-| O005 | Whether dedicated per-artifact PVCs ship alongside shared cache layout in v1. | Shared cache is required; dedicated claims remain optional until lifecycle tests justify them. | M1 |
 | O006 | Preconfigured MIG resources in v1. | Full GPUs only in the support claim; do not dynamically reconfigure MIG. | M3/beta |
 | O007 | Exact public llama-server endpoint matrix. | Start with OpenAI chat/completions/embeddings/responses and selected native inference routes, then pin through conformance tests. | M4 |
 | O008 | Maximum acceptable planner estimate error and gateway overhead. | Establish baselines on reference hardware and turn them into beta thresholds. | M3/M6 |

@@ -69,6 +69,11 @@ if ! grep -Fq "image: ghcr.io/tannerburns/kama-manager:${version}" \
   echo "Kustomize manager image does not match VERSION ${version}" >&2
   exit 1
 fi
+if ! grep -Fq -- "--importer-image=ghcr.io/tannerburns/kama-importer:${version}" \
+  "${repo_root}/config/manager/manager.yaml"; then
+  echo "Kustomize importer image does not match VERSION ${version}" >&2
+  exit 1
+fi
 for workflow in "${repo_root}/.github/workflows/ci.yml" \
   "${repo_root}/.github/workflows/kind.yml" \
   "${repo_root}/.github/workflows/release.yml"; do
@@ -99,7 +104,8 @@ if [[ "${GITHUB_REF_TYPE:-}" == "tag" || -n "${RELEASE_TAG:-}" ]]; then
 fi
 
 builder_ref="docker.io/library/golang:${go_version}-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2"
-for dockerfile in "${repo_root}/Dockerfile" "${repo_root}/Dockerfile.test-fixtures"; do
+for dockerfile in "${repo_root}/Dockerfile" "${repo_root}/Dockerfile.importer" \
+  "${repo_root}/Dockerfile.test-fixtures"; do
   if ! grep -Fq "FROM ${builder_ref} AS builder" "${dockerfile}"; then
     echo "${dockerfile} does not use the approved digest-pinned Go builder" >&2
     exit 1
@@ -134,6 +140,10 @@ if ! grep -Fq "example.invalid/kama-manager:${version}" <<<"${rendered}"; then
   echo "chart's default image tag does not match VERSION ${version}" >&2
   exit 1
 fi
+if ! grep -Fq "ghcr.io/tannerburns/kama-importer:${version}" <<<"${rendered}"; then
+  echo "chart's default importer image tag does not match VERSION ${version}" >&2
+  exit 1
+fi
 if ! grep -Fq "app.kubernetes.io/version: \"${version}\"" <<<"${rendered}"; then
   echo "rendered chart version label does not match VERSION ${version}" >&2
   exit 1
@@ -146,12 +156,19 @@ if [[ "${CHECK_BINARY:-0}" == "1" ]]; then
     echo "manager binary version ${binary_version} does not match VERSION ${version}" >&2
     exit 1
   fi
+  importer_binary="${IMPORTER_BINARY:-${repo_root}/bin/kama-importer}"
+  importer_binary_version="$("${importer_binary}" --version)"
+  if [[ "${importer_binary_version}" != "${version}" ]]; then
+    echo "importer binary version ${importer_binary_version} does not match VERSION ${version}" >&2
+    exit 1
+  fi
 fi
 
 if [[ "${CHECK_IMAGES:-0}" == "1" ]]; then
   manager_image="${IMG:?IMG is required when CHECK_IMAGES=1}"
+  importer_image="${IMPORTER_IMG:?IMPORTER_IMG is required when CHECK_IMAGES=1}"
   fixtures_image="${FIXTURES_IMG:?FIXTURES_IMG is required when CHECK_IMAGES=1}"
-  for image in "${manager_image}" "${fixtures_image}"; do
+  for image in "${manager_image}" "${importer_image}" "${fixtures_image}"; do
     label="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${image}")"
     if [[ "${label}" != "${version}" ]]; then
       echo "image ${image} version label ${label} does not match VERSION ${version}" >&2
@@ -162,6 +179,12 @@ if [[ "${CHECK_IMAGES:-0}" == "1" ]]; then
   manager_version="$(docker run --rm "${manager_image}" --version)"
   if [[ "${manager_version}" != "${version}" ]]; then
     echo "manager image binary version ${manager_version} does not match VERSION ${version}" >&2
+    exit 1
+  fi
+
+  importer_version="$(docker run --rm "${importer_image}" --version)"
+  if [[ "${importer_version}" != "${version}" ]]; then
+    echo "importer image binary version ${importer_version} does not match VERSION ${version}" >&2
     exit 1
   fi
 fi

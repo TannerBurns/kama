@@ -1,0 +1,13 @@
+# Populate and then stop mutating the same-namespace PVC named durable-model-source.
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: manual-direct
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  source:
+    persistentVolumeClaim:
+      claimName: durable-model-source
+      rootPath: models
+      importPolicy: Direct

@@ -1,3 +1,8 @@
+# This is a development bundle. It installs the CRDs and controller with
+# admission disabled because it does not provision webhook TLS. Use the Helm
+# chart for the complete, fail-closed M1 installation, or supply equivalent TLS
+# and enable the webhook resources/manager flag in a downstream overlay.
+
 # Adds namespace to all resources.
 namespace: kama-system
 
@@ -15,7 +20,7 @@ namePrefix: kama-
 #    someName: someValue
 
 resources:
-#- ../crd
+- ../crd
 - ../rbac
 - ../manager
 # [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in

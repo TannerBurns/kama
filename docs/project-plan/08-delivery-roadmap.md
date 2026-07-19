@@ -50,22 +50,28 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 
 ## M1 - Persistent artifact plane
 
+**Status: In Progress.** The repository-scoped implementation deliverables are
+complete. That is not milestone acceptance: immutable fixture-backed Kind results and
+the strict live Hugging Face/CSI evidence remain pending, so every definition-of-done
+item below stays unchecked.
+
 ### Deliverables
 
-- `ModelCache` and `ModelArtifact` CRDs, webhook validation, controllers, and status.
-- Managed shared-PVC layout and adopted PVC `Copy`/`Direct` modes.
-- Hugging Face resolver/importer, checksum/GGUF/shard validation, resumable staging,
+- [x] `ModelCache` and `ModelArtifact` CRDs, webhook validation, controllers, and status.
+- [x] Managed shared-PVC layout and adopted PVC `Copy`/`Direct` modes.
+- [x] Hugging Face resolver/importer, checksum/GGUF/shard validation, resumable staging,
   atomic publication, retention, Events, and metrics.
-- Manual PVC examples and recovery documentation.
+- [x] Manual PVC examples and recovery documentation.
 
 ### Definition of done
 
-- A pinned public/private Hugging Face artifact imports once and remains ready across
+- [ ] A pinned public/private Hugging Face artifact imports once and remains ready across
   controller and Job restarts.
-- Manual RWX and RWO artifacts validate and surface correct placement constraints.
-- Corrupt, incomplete, unauthorized, and storage-full cases fail safely.
+- [ ] Manual RWX and RWO artifacts validate and surface correct placement constraints.
+- [ ] Corrupt, incomplete, unauthorized, and storage-full cases fail safely.
 
 Design: [model storage](04-model-artifacts-and-storage.md).
+Evidence checklist: [M1 acceptance](../acceptance/m1.md).
 
 ## M2 - Baseline single-replica serving
 

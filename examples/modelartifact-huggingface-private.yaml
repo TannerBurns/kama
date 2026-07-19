@@ -1,0 +1,19 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: private-gguf
+spec:
+  format: GGUF
+  entrypoint: model-00001-of-00002.gguf
+  cacheRef:
+    name: shared-models
+  source:
+    huggingFace:
+      repository: replace-owner/private-model-gguf
+      revision: replace-with-full-commit-sha
+      files:
+        - model-00001-of-00002.gguf
+        - model-00002-of-00002.gguf
+      tokenSecretRef:
+        name: huggingface-token
+        key: token

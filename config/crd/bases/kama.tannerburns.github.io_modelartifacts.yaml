@@ -1,0 +1,479 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: modelartifacts.kama.tannerburns.github.io
+spec:
+  group: kama.tannerburns.github.io
+  names:
+    kind: ModelArtifact
+    listKind: ModelArtifactList
+    plural: modelartifacts
+    shortNames:
+    - ma
+    singular: modelartifact
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.format
+      name: Format
+      type: string
+    - jsonPath: .status.artifactDigest
+      name: Digest
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ModelArtifact represents immutable verified GGUF content independently
+          of serving workloads.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ModelArtifactSpec declares one immutable GGUF file or verified
+              GGUF shard set.
+            properties:
+              cacheRef:
+                description: |-
+                  CacheRef identifies a ModelCache in this namespace. It is required for
+                  Hugging Face and Copy sources, and forbidden for Direct sources.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              entrypoint:
+                description: Entrypoint is a clean POSIX relative path to the primary
+                  GGUF file.
+                type: string
+              format:
+                description: Format is the artifact format. M1 supports GGUF.
+                enum:
+                - GGUF
+                type: string
+              source:
+                description: Source selects exactly one artifact source.
+                properties:
+                  huggingFace:
+                    description: HuggingFace downloads selected files from one pinned
+                      or resolvable repository revision.
+                    properties:
+                      files:
+                        description: Files contains one or more clean POSIX relative
+                          file selectors.
+                        items:
+                          type: string
+                        maxItems: 128
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: set
+                      repository:
+                        description: Repository is a Hugging Face model repository
+                          ID, such as owner/model.
+                        type: string
+                      revision:
+                        description: Revision is a required commit, tag, or branch
+                          resolved once to an immutable commit.
+                        type: string
+                      tokenSecretRef:
+                        description: TokenSecretRef optionally selects a token key
+                          from a Secret in this namespace.
+                        properties:
+                          key:
+                            description: Key is the Secret data key containing the
+                              token.
+                            type: string
+                          name:
+                            description: Name is the Secret name.
+                            type: string
+                        required:
+                        - key
+                        - name
+                        type: object
+                    required:
+                    - files
+                    - repository
+                    - revision
+                    type: object
+                  persistentVolumeClaim:
+                    description: PersistentVolumeClaim copies or directly validates
+                      content on a same-namespace claim.
+                    properties:
+                      claimName:
+                        description: ClaimName is the source PersistentVolumeClaim
+                          name.
+                        type: string
+                      importPolicy:
+                        default: Copy
+                        description: ImportPolicy defaults to Copy. Direct retains
+                          and serves the adopted claim in place.
+                        enum:
+                        - Copy
+                        - Direct
+                        type: string
+                      rootPath:
+                        description: |-
+                          RootPath is a clean POSIX relative directory containing the entrypoint.
+                          A value of "." selects the volume root.
+                        type: string
+                    required:
+                    - claimName
+                    - rootPath
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of huggingFace or persistentVolumeClaim must
+                    be set
+                  rule: has(self.huggingFace) != has(self.persistentVolumeClaim)
+              verification:
+                description: Verification contains optional expected content identity
+                  assertions.
+                properties:
+                  expectedSHA256:
+                    description: |-
+                      ExpectedSHA256 is the lowercase or uppercase hexadecimal SHA-256 of a single
+                      file, or of the canonical content manifest for a shard set.
+                    pattern: ^[A-Fa-f0-9]{64}$
+                    type: string
+                  expectedSize:
+                    description: ExpectedSize is the aggregate selected content size
+                      in bytes.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                type: object
+            required:
+            - entrypoint
+            - format
+            - source
+            type: object
+          status:
+            description: ModelArtifactStatus reports resolved source identity, verification,
+              and serving location.
+            properties:
+              architecture:
+                description: Architecture is the architecture reported by GGUF metadata.
+                type: string
+              artifactDigest:
+                description: ArtifactDigest is the single-file digest or canonical
+                  content-manifest digest.
+                type: string
+              cleanupOperationID:
+                description: |-
+                  CleanupOperationID is the controller-authenticated checkpoint for a
+                  successful deletion cleanup operation. It is written only through the
+                  status subresource and is not artifact-serving state.
+                pattern: ^[0-9a-f]{20}$
+                type: string
+              conditions:
+                description: Conditions summarize source, import, verification, and
+                  readiness state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              files:
+                description: Files is the bounded, sorted set of selected file identities.
+                items:
+                  description: ModelArtifactFileStatus records the immutable identity
+                    of one selected file.
+                  properties:
+                    path:
+                      description: Path is the clean relative path within the validated
+                        content root.
+                      type: string
+                    sha256:
+                      description: SHA256 is the lowercase hexadecimal file digest.
+                      pattern: ^[a-f0-9]{64}$
+                      type: string
+                    size:
+                      description: Size is the file size in bytes.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                  required:
+                  - path
+                  - sha256
+                  - size
+                  type: object
+                maxItems: 128
+                type: array
+                x-kubernetes-list-map-keys:
+                - path
+                x-kubernetes-list-type: map
+              jobRef:
+                description: JobRef identifies the most recent deterministic import
+                  or validation Job.
+                properties:
+                  name:
+                    description: Name is the Job name.
+                    type: string
+                  uid:
+                    description: UID identifies the exact Job observed by the controller.
+                    type: string
+                required:
+                - name
+                type: object
+              location:
+                description: Location is present only when storage identity has been
+                  resolved.
+                properties:
+                  accessModes:
+                    description: AccessModes are the access modes advertised by the
+                      serving claim.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  claimName:
+                    description: ClaimName is the claim serving Pods mount.
+                    type: string
+                  claimUID:
+                    description: ClaimUID identifies the exact serving claim validated
+                      by Kama.
+                    type: string
+                  mountScope:
+                    description: MountScope is Kama's normalized scheduling contract
+                      for this location.
+                    enum:
+                    - MultiNode
+                    - SingleNode
+                    - SinglePod
+                    type: string
+                  nodeAffinity:
+                    description: NodeAffinity is the normalized node affinity from
+                      the bound PersistentVolume.
+                    properties:
+                      required:
+                        description: required specifies hard node constraints that
+                          must be met.
+                        properties:
+                          nodeSelectorTerms:
+                            description: Required. A list of node selector terms.
+                              The terms are ORed.
+                            items:
+                              description: |-
+                                A null or empty node selector term matches no objects. The requirements of
+                                them are ANDed.
+                                The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                              properties:
+                                matchExpressions:
+                                  description: A list of node selector requirements
+                                    by node's labels.
+                                  items:
+                                    description: |-
+                                      A node selector requirement is a selector that contains values, a key, and an operator
+                                      that relates the key and values.
+                                    properties:
+                                      key:
+                                        description: The label key that the selector
+                                          applies to.
+                                        type: string
+                                      operator:
+                                        description: |-
+                                          Represents a key's relationship to a set of values.
+                                          Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                        type: string
+                                      values:
+                                        description: |-
+                                          An array of string values. If the operator is In or NotIn,
+                                          the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                          the values array must be empty. If the operator is Gt or Lt, the values
+                                          array must have a single element, which will be interpreted as an integer.
+                                          This array is replaced during a strategic merge patch.
+                                        items:
+                                          type: string
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                    required:
+                                    - key
+                                    - operator
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                matchFields:
+                                  description: A list of node selector requirements
+                                    by node's fields.
+                                  items:
+                                    description: |-
+                                      A node selector requirement is a selector that contains values, a key, and an operator
+                                      that relates the key and values.
+                                    properties:
+                                      key:
+                                        description: The label key that the selector
+                                          applies to.
+                                        type: string
+                                      operator:
+                                        description: |-
+                                          Represents a key's relationship to a set of values.
+                                          Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                        type: string
+                                      values:
+                                        description: |-
+                                          An array of string values. If the operator is In or NotIn,
+                                          the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                          the values array must be empty. If the operator is Gt or Lt, the values
+                                          array must have a single element, which will be interpreted as an integer.
+                                          This array is replaced during a strategic merge patch.
+                                        items:
+                                          type: string
+                                        type: array
+                                        x-kubernetes-list-type: atomic
+                                    required:
+                                    - key
+                                    - operator
+                                    type: object
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        required:
+                        - nodeSelectorTerms
+                        type: object
+                        x-kubernetes-map-type: atomic
+                    type: object
+                  readOnly:
+                    description: ReadOnly requires serving containers to mount the
+                      location read-only.
+                    type: boolean
+                  subPath:
+                    description: SubPath is the clean path within the claim containing
+                      the artifact manifest and content.
+                    type: string
+                  volumeMode:
+                    description: VolumeMode is the serving claim's volume mode.
+                    type: string
+                  volumeName:
+                    description: VolumeName is the bound PersistentVolume name.
+                    type: string
+                  volumeUID:
+                    description: VolumeUID identifies the exact PersistentVolume observed
+                      by the controller.
+                    type: string
+                required:
+                - claimName
+                - mountScope
+                - readOnly
+                - subPath
+                type: object
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation reconciled
+                  by the controller.
+                format: int64
+                type: integer
+              quantization:
+                description: Quantization is the quantization description derived
+                  from GGUF metadata.
+                type: string
+              resolvedRevision:
+                description: ResolvedRevision is the immutable full Hugging Face commit
+                  for a remote source.
+                type: string
+              shardCount:
+                description: ShardCount is the complete standard GGUF shard count.
+                format: int32
+                type: integer
+              size:
+                description: Size is the aggregate selected content size in bytes.
+                format: int64
+                type: integer
+              validatedAt:
+                description: ValidatedAt records successful completion of content
+                  validation.
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,10 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: adopted-cache
+spec:
+  # Adopted claims must use Retain and never receive a Kama owner reference.
+  retentionPolicy: Retain
+  storage:
+    existingClaim:
+      name: preprovisioned-rwx-cache

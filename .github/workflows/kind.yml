@@ -5,9 +5,11 @@ on:
     branches:
       - main
     paths:
+      - "api/**"
       - "charts/**"
       - "cmd/**"
       - "config/**"
+      - "examples/**"
       - "hack/**"
       - "internal/**"
       - "test/**"
@@ -19,13 +21,16 @@ on:
       - VERSION
       - go.mod
       - go.sum
+      - .github/workflows/kind.yml
   push:
     branches:
       - main
     paths:
+      - "api/**"
       - "charts/**"
       - "cmd/**"
       - "config/**"
+      - "examples/**"
       - "hack/**"
       - "internal/**"
       - "test/**"
@@ -37,6 +42,7 @@ on:
       - VERSION
       - go.mod
       - go.sum
+      - .github/workflows/kind.yml
   workflow_dispatch:
 
 permissions:
@@ -48,9 +54,9 @@ concurrency:
 
 jobs:
   kind:
-    name: Kubernetes ${{ matrix.kubernetes }} / KEDA 2.20
+    name: Kubernetes ${{ matrix.kubernetes }} / admission / KEDA 2.20
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -76,7 +82,7 @@ jobs:
       - name: Install pinned Kind, Helm, and build tools
         run: make kind helm
 
-      - name: Run install, activation, fixture, and uninstall smoke
+      - name: Run install, admission, activation, fixture, and uninstall smoke
         env:
           KIND_CLUSTER: kama-${{ matrix.kubernetes }}
           KIND_NODE_IMAGE: ${{ matrix.node-image }}

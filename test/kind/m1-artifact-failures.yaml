@@ -1,0 +1,49 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: kind-checksum-failure
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: kind-cache
+  verification:
+    expectedSHA256: "0000000000000000000000000000000000000000000000000000000000000000"
+  source:
+    huggingFace:
+      repository: kama/public-gguf
+      revision: 0123456789abcdef0123456789abcdef01234567
+      files:
+        - model.gguf
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: kind-unauthorized
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: kind-cache
+  source:
+    huggingFace:
+      repository: kama/private-gguf
+      revision: 0123456789abcdef0123456789abcdef01234567
+      files:
+        - model.gguf
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: kind-missing-shard
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: model-00001-of-00002.gguf
+  source:
+    persistentVolumeClaim:
+      claimName: kama-manual-models
+      rootPath: models
+      importPolicy: Direct

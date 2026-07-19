@@ -18,16 +18,20 @@ package main
 
 import (
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -36,6 +40,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	kamav1alpha1 "github.com/TannerBurns/kama/api/v1alpha1"
+	artifactcontroller "github.com/TannerBurns/kama/internal/controller"
 	"github.com/TannerBurns/kama/internal/version"
 	// +kubebuilder:scaffold:imports
 )
@@ -47,6 +53,7 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(kamav1alpha1.AddToScheme(scheme))
 
 	// +kubebuilder:scaffold:scheme
 }
@@ -60,7 +67,9 @@ func main() {
 	var probeAddr string
 	var secureMetrics bool
 	var enableHTTP2 bool
+	var enableWebhooks bool
 	var showVersion bool
+	var importerImage, importerPullPolicy, importerPullSecrets, hubEndpoint string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -79,6 +88,16 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&enableWebhooks, "enable-webhooks", false,
+		"Register ModelCache and ModelArtifact admission webhooks. Serving certificates must be configured.")
+	flag.StringVar(&importerImage, "importer-image", "ghcr.io/tannerburns/kama-importer:dev",
+		"OCI image used by artifact import and storage probe Jobs.")
+	flag.StringVar(&importerPullPolicy, "importer-image-pull-policy", string(corev1.PullIfNotPresent),
+		"Image pull policy used by artifact import and storage probe Jobs.")
+	flag.StringVar(&importerPullSecrets, "importer-image-pull-secrets", "",
+		"Comma-separated image pull Secret names copied to artifact Job Pods.")
+	flag.StringVar(&hubEndpoint, "hub-endpoint", "https://huggingface.co",
+		"Cluster-admin configured Hugging Face Hub endpoint used by importer Jobs.")
 	flag.BoolVar(&showVersion, "version", false, "Print the Kama version and exit.")
 	opts := zap.Options{
 		Development: false,
@@ -182,6 +201,38 @@ func main() {
 		setupLog.Error(err, "Failed to start manager")
 		os.Exit(1)
 	}
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		setupLog.Error(err, "Failed to create Kubernetes clientset")
+		os.Exit(1)
+	}
+	importerOptions, err := buildImporterOptions(importerImage, importerPullPolicy, importerPullSecrets, hubEndpoint)
+	if err != nil {
+		setupLog.Error(err, "Invalid importer configuration")
+		os.Exit(1)
+	}
+	if err := artifactcontroller.NewModelCacheReconciler(
+		mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorder("modelcache-controller"), clientset, importerOptions,
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up ModelCache controller")
+		os.Exit(1)
+	}
+	if err := artifactcontroller.NewModelArtifactReconciler(
+		mgr.GetClient(), mgr.GetScheme(), mgr.GetEventRecorder("modelartifact-controller"), clientset, importerOptions,
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up ModelArtifact controller")
+		os.Exit(1)
+	}
+	if enableWebhooks {
+		if err := kamav1alpha1.SetupModelCacheWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to set up ModelCache webhook")
+			os.Exit(1)
+		}
+		if err := kamav1alpha1.SetupModelArtifactWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to set up ModelArtifact webhook")
+			os.Exit(1)
+		}
+	}
 
 	// +kubebuilder:scaffold:builder
 
@@ -193,10 +244,42 @@ func main() {
 		setupLog.Error(err, "Failed to set up ready check")
 		os.Exit(1)
 	}
+	if enableWebhooks {
+		if err := mgr.AddReadyzCheck("webhook", mgr.GetWebhookServer().StartedChecker()); err != nil {
+			setupLog.Error(err, "Failed to set up webhook ready check")
+			os.Exit(1)
+		}
+	}
 
 	setupLog.Info("Starting manager", "version", version.Version)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
+}
+
+func buildImporterOptions(
+	image, pullPolicy, pullSecrets, hubEndpoint string,
+) (artifactcontroller.ImporterOptions, error) {
+	policy := corev1.PullPolicy(pullPolicy)
+	switch policy {
+	case corev1.PullAlways, corev1.PullIfNotPresent, corev1.PullNever:
+	default:
+		return artifactcontroller.ImporterOptions{}, fmt.Errorf("unsupported importer image pull policy %q", pullPolicy)
+	}
+	if image == "" {
+		return artifactcontroller.ImporterOptions{}, errors.New("importer image must not be empty")
+	}
+	if !strings.HasPrefix(hubEndpoint, "https://") && !strings.HasPrefix(hubEndpoint, "http://") {
+		return artifactcontroller.ImporterOptions{}, errors.New("hub endpoint must use http or https")
+	}
+	options := artifactcontroller.ImporterOptions{
+		Image: image, PullPolicy: policy, HubEndpoint: strings.TrimRight(hubEndpoint, "/"),
+	}
+	for name := range strings.SplitSeq(pullSecrets, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			options.ImagePullSecrets = append(options.ImagePullSecrets, corev1.LocalObjectReference{Name: name})
+		}
+	}
+	return options, nil
 }

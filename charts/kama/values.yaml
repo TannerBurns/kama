@@ -9,6 +9,19 @@ image:
   digest: ""
   pullPolicy: IfNotPresent
 
+importer:
+  image:
+    repository: ghcr.io/tannerburns/kama-importer
+    # Defaults to the chart appVersion when empty.
+    tag: ""
+    # When set, digest takes precedence over tag.
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Image pull Secrets copied to importer Jobs. Entries may be names or
+  # objects with a name field.
+  imagePullSecrets: []
+  hubEndpoint: https://huggingface.co
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
@@ -20,8 +33,8 @@ serviceAccount:
   name: ""
 
 rbac:
-  # M0 grants namespaced Lease/event permissions and, when secure metrics are
-  # enabled, TokenReview/SubjectAccessReview permissions.
+  # Installs the cluster-wide controller permissions and namespace-scoped
+  # leader-election permissions.
   create: true
 
 leaderElection:
@@ -34,6 +47,21 @@ metrics:
 
 health:
   port: 8081
+
+webhook:
+  enabled: true
+  # controller-runtime's M1 webhook listener is fixed at 9443.
+  port: 9443
+  failurePolicy: Fail
+  timeoutSeconds: 10
+  tls:
+    # Defaults to <release>-webhook-tls when empty. The Secret is managed by
+    # Helm; its CA is reused and the serving certificate is refreshed on upgrade.
+    secretName: ""
+    caValidityDays: 3650
+    certificateValidityDays: 365
+    certName: tls.crt
+    keyName: tls.key
 
 service:
   type: ClusterIP

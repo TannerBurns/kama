@@ -1,0 +1,20 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: shared-models
+spec:
+  retentionPolicy: Retain
+  storage:
+    claimTemplate:
+      metadata:
+        labels:
+          app.kubernetes.io/part-of: kama
+      spec:
+        # Replace with a CSI StorageClass that provides the required filesystem semantics.
+        storageClassName: replace-with-rwx-storage-class
+        accessModes:
+          - ReadWriteMany
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: 100Gi

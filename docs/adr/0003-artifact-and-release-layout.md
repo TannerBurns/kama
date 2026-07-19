@@ -14,6 +14,8 @@ tags would allow an apparently coherent release to contain mismatched components
 - The tracked root `VERSION` file is the sole release-version source. Its initial
   value is `0.1.0-dev.0`.
 - The manager image is `ghcr.io/tannerburns/kama-manager`.
+- The M1 importer image is `ghcr.io/tannerburns/kama-importer` and follows the same
+  release version as the manager.
 - The nonproduction fixture image is
   `ghcr.io/tannerburns/kama-test-fixtures` and is never part of the supported runtime
   contract.
@@ -27,8 +29,8 @@ tags would allow an apparently coherent release to contain mismatched components
   controlled deployments.
 - Release tags use `v${VERSION}`. A release workflow rejects a tag that does not
   exactly match the tracked version.
-- Published manager and fixture images are multi-platform for `linux/amd64` and
-  `linux/arm64`, run as non-root, and use digest-pinned base images.
+- Published manager, importer, and fixture images are multi-platform for
+  `linux/amd64` and `linux/arm64`, run as non-root, and use digest-pinned base images.
 - Release publication signs immutable image and chart digests using Cosign keyless
   signing and attaches Syft-generated SPDX SBOM attestations. M0 requires working
   hooks and validation; it does not require publishing a release.

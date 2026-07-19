@@ -158,3 +158,6 @@ measurements.
 Each implementation PR identifies its project-plan module, work package/milestone,
 acceptance scenario, and affected decision IDs. A behavior change is incomplete until
 its plan, tests, and operator-facing documentation agree.
+
+The M1 evidence checklist and separation between fixture coverage and strict live
+source/CSI qualification are tracked in [M1 acceptance](../acceptance/m1.md).

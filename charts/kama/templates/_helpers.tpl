@@ -1,18 +1,18 @@
 {{/* Expand the chart name. */}}
 {{- define "kama.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- default .Chart.Name .Values.nameOverride | replace "." "-" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/* Create a stable, DNS-safe release name. */}}
 {{- define "kama.fullname" -}}
 {{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- .Values.fullnameOverride | replace "." "-" | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
 {{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- .Release.Name | replace "." "-" | trunc 63 | trimSuffix "-" }}
 {{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" .Release.Name $name | replace "." "-" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -59,4 +59,42 @@ app.kubernetes.io/component: manager
 {{- else -}}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
 {{- end -}}
+{{- end }}
+
+{{/* Importer image reference; digest wins over tag. */}}
+{{- define "kama.importerImage" -}}
+{{- if .Values.importer.image.digest -}}
+{{- printf "%s@%s" .Values.importer.image.repository .Values.importer.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.importer.image.repository (default .Chart.AppVersion .Values.importer.image.tag) -}}
+{{- end -}}
+{{- end }}
+
+{{/* Comma-separated importer image pull Secret names for the manager flag. */}}
+{{- define "kama.importerImagePullSecrets" -}}
+{{- $names := list -}}
+{{- range .Values.importer.imagePullSecrets -}}
+{{- if kindIs "string" . -}}
+{{- $names = append $names . -}}
+{{- else -}}
+{{- $names = append $names .name -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end }}
+
+{{/* Helm-owned webhook TLS Secret. */}}
+{{- define "kama.webhookTLSSecretName" -}}
+{{- if .Values.webhook.tls.secretName -}}
+{{- .Values.webhook.tls.secretName -}}
+{{- else -}}
+{{- $base := include "kama.fullname" . | trunc 51 | trimSuffix "-" -}}
+{{- printf "%s-webhook-tls" $base -}}
+{{- end -}}
+{{- end }}
+
+{{/* Dedicated ClusterIP admission Service name. */}}
+{{- define "kama.webhookServiceName" -}}
+{{- $base := include "kama.fullname" . | trunc 55 | trimSuffix "-" -}}
+{{- printf "%s-webhook" $base -}}
 {{- end }}

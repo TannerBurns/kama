@@ -22,12 +22,21 @@ or isolation requirements.
 
 ```text
 /cache/
-  .kama/staging/<artifact-uid>/<attempt>/
-  blobs/sha256/<artifact-digest>/
+  .kama/staging/<operation-id>/
+  .kama/operations/<operation-id>.json
+  .kama/locks/<operation-id>.lock
+  blobs/sha256/<publication-digest>/
     manifest.json
     READY
     model.gguf
 ```
+
+`artifactDigest` is the selected file SHA-256 for a single-file artifact and the
+canonical manifest SHA-256 for a multi-file artifact. The physical
+`publication-digest` is always the canonical manifest SHA-256, which also binds
+relative paths and the entrypoint. Keeping those identities distinct prevents two
+single-file artifacts with identical bytes but different serving paths from
+colliding in one publication directory.
 
 - Use `volumeMode: Filesystem`; llama-server consumes regular file paths.
 - Use a POSIX-like CSI filesystem with acceptable regular-file `mmap` behavior.
@@ -63,13 +72,19 @@ of leaving unexplained pending Pods.
 7. Verify expected size/digest when supplied, always compute SHA-256, parse GGUF
    metadata, and validate shard completeness.
 8. Write a canonical sorted manifest of relative path, size, and digest. The artifact
-   digest is the SHA-256 of that manifest for multi-file content.
+   digest is the file SHA-256 for single-file content and the manifest SHA-256 for
+   multi-file content; the manifest SHA-256 is always the physical publication key.
 9. `fsync`, atomically rename within the same filesystem, and write `READY` last.
 10. Mark the artifact ready and remove source credentials with the Job.
 
 Import logic is idempotent because Kubernetes does not guarantee exactly-once Job
 execution. A retry first validates an existing final manifest, then resumes or cleans
 only its own stale staging attempt.
+
+The controller finalizer freezes the artifact source, cache, and verification fields
+before it creates any importer resources. This ensures every retry and deletion-time
+cleanup targets the same PVC and operation namespace. Submit a new `ModelArtifact`
+instead of retargeting an in-progress or failed one.
 
 ## Manual PVC import
 
@@ -91,8 +106,6 @@ spec:
       importPolicy: Copy
   cacheRef:
     name: default
-  verification:
-    expectedSHA256: optional
 ```
 
 ### `Copy` mode
@@ -178,6 +191,12 @@ responses.
 - Read-only serving mounts and access-mode-aware placement inputs.
 - Retention defaults, Events, metrics, and manual-PVC documentation.
 
+The concrete M1 design is accepted in
+[ADR-0004](../adr/0004-persistent-artifact-plane.md). Dedicated per-artifact managed
+claims, automatic garbage collection, and periodic `Direct` integrity scrubbing are
+deferred. The functional storage floor and pending CSI measurements are tracked in
+[storage qualification](../storage-qualification.md).
+
 ## Acceptance criteria
 
 - The same immutable Hugging Face revision is downloaded once across repeated Job and
@@ -195,7 +214,7 @@ responses.
 
 - [Kubernetes PersistentVolume access modes and retention](https://kubernetes.io/docs/concepts/storage/persistent-volumes/)
 - [Kubernetes Jobs](https://kubernetes.io/docs/concepts/workloads/controllers/job/)
-- [Hugging Face downloads](https://huggingface.co/docs/huggingface_hub/guides/download)
+- [Hugging Face file-download contract](https://huggingface.co/docs/huggingface_hub/en/package_reference/file_download)
 - [Hugging Face cache design](https://huggingface.co/docs/huggingface_hub/main/guides/manage-cache)
 - [GGUF specification](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md)
 - [llama.cpp GGUF splitting](https://github.com/ggml-org/llama.cpp/blob/master/tools/gguf-split/README.md)

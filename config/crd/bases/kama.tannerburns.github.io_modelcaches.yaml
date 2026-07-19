@@ -1,0 +1,382 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: modelcaches.kama.tannerburns.github.io
+spec:
+  group: kama.tannerburns.github.io
+  names:
+    kind: ModelCache
+    listKind: ModelCacheList
+    plural: modelcaches
+    shortNames:
+    - mc
+    singular: modelcache
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.claimName
+      name: Claim
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ModelCache is a namespaced durable storage pool for verified
+          artifacts.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ModelCacheSpec declares the storage backing a persistent
+              artifact cache.
+            properties:
+              retentionPolicy:
+                default: Retain
+                description: |-
+                  RetentionPolicy controls a controller-created claim after this cache is deleted.
+                  Adopted claims always use Retain.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              storage:
+                description: Storage selects either an adopted claim or a controller-created
+                  claim.
+                properties:
+                  claimTemplate:
+                    description: ClaimTemplate declares a PersistentVolumeClaim managed
+                      by Kama.
+                    properties:
+                      metadata:
+                        description: Metadata is copied to the generated claim.
+                        properties:
+                          annotations:
+                            additionalProperties:
+                              type: string
+                            description: Annotations are copied to the generated claim.
+                            type: object
+                          labels:
+                            additionalProperties:
+                              type: string
+                            description: Labels are copied to the generated claim
+                              in addition to Kama ownership labels.
+                            type: object
+                        type: object
+                      spec:
+                        description: Spec declares the generated claim's storage requirements.
+                        properties:
+                          accessModes:
+                            description: AccessModes must contain at least one writable
+                              access mode.
+                            items:
+                              type: string
+                            maxItems: 4
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-type: set
+                          resources:
+                            description: Resources contains the storage capacity request.
+                            properties:
+                              requests:
+                                additionalProperties:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                                  x-kubernetes-int-or-string: true
+                                description: Requests must contain one positive storage
+                                  request.
+                                type: object
+                            required:
+                            - requests
+                            type: object
+                          storageClassName:
+                            description: |-
+                              StorageClassName selects the provisioner's storage class. Nil uses the cluster default;
+                              an explicit empty string disables dynamic provisioning.
+                            type: string
+                          volumeMode:
+                            default: Filesystem
+                            description: VolumeMode is Filesystem for GGUF regular-file
+                              and mmap semantics.
+                            enum:
+                            - Filesystem
+                            type: string
+                        required:
+                        - accessModes
+                        - resources
+                        type: object
+                    required:
+                    - spec
+                    type: object
+                  existingClaim:
+                    description: |-
+                      ExistingClaim adopts an existing PersistentVolumeClaim in the ModelCache namespace.
+                      Kama never adds ownership to an adopted claim.
+                    properties:
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of existingClaim or claimTemplate must be set
+                  rule: has(self.existingClaim) != has(self.claimTemplate)
+            required:
+            - storage
+            type: object
+          status:
+            description: ModelCacheStatus reports the resolved claim and its most
+              recent storage probe.
+            properties:
+              accessModes:
+                description: AccessModes are the access modes advertised by the bound
+                  claim.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              capacity:
+                anyOf:
+                - type: integer
+                - type: string
+                description: Capacity is the bound claim's provisioned storage capacity.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              claimName:
+                description: ClaimName is the resolved PersistentVolumeClaim name.
+                type: string
+              claimUID:
+                description: ClaimUID identifies the exact claim observed by the controller.
+                type: string
+              conditions:
+                description: Conditions summarize cache availability and probe results.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              freeSpace:
+                anyOf:
+                - type: integer
+                - type: string
+                description: FreeSpace is the filesystem free-space value reported
+                  by the latest probe.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+              lastProbeTime:
+                description: LastProbeTime records completion of the latest capacity
+                  and filesystem probe.
+                format: date-time
+                type: string
+              mountScope:
+                description: MountScope is Kama's normalized scheduling contract for
+                  the resolved access mode.
+                enum:
+                - MultiNode
+                - SingleNode
+                - SinglePod
+                type: string
+              nodeAffinity:
+                description: NodeAffinity is the normalized node affinity from the
+                  bound PersistentVolume.
+                properties:
+                  required:
+                    description: required specifies hard node constraints that must
+                      be met.
+                    properties:
+                      nodeSelectorTerms:
+                        description: Required. A list of node selector terms. The
+                          terms are ORed.
+                        items:
+                          description: |-
+                            A null or empty node selector term matches no objects. The requirements of
+                            them are ANDed.
+                            The TopologySelectorTerm type implements a subset of the NodeSelectorTerm.
+                          properties:
+                            matchExpressions:
+                              description: A list of node selector requirements by
+                                node's labels.
+                              items:
+                                description: |-
+                                  A node selector requirement is a selector that contains values, a key, and an operator
+                                  that relates the key and values.
+                                properties:
+                                  key:
+                                    description: The label key that the selector applies
+                                      to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      An array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. If the operator is Gt or Lt, the values
+                                      array must have a single element, which will be interpreted as an integer.
+                                      This array is replaced during a strategic merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            matchFields:
+                              description: A list of node selector requirements by
+                                node's fields.
+                              items:
+                                description: |-
+                                  A node selector requirement is a selector that contains values, a key, and an operator
+                                  that relates the key and values.
+                                properties:
+                                  key:
+                                    description: The label key that the selector applies
+                                      to.
+                                    type: string
+                                  operator:
+                                    description: |-
+                                      Represents a key's relationship to a set of values.
+                                      Valid operators are In, NotIn, Exists, DoesNotExist. Gt, and Lt.
+                                    type: string
+                                  values:
+                                    description: |-
+                                      An array of string values. If the operator is In or NotIn,
+                                      the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                                      the values array must be empty. If the operator is Gt or Lt, the values
+                                      array must have a single element, which will be interpreted as an integer.
+                                      This array is replaced during a strategic merge patch.
+                                    items:
+                                      type: string
+                                    type: array
+                                    x-kubernetes-list-type: atomic
+                                required:
+                                - key
+                                - operator
+                                type: object
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        type: array
+                        x-kubernetes-list-type: atomic
+                    required:
+                    - nodeSelectorTerms
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation reconciled
+                  by the controller.
+                format: int64
+                type: integer
+              storageClassName:
+                description: StorageClassName is the resolved storage class.
+                type: string
+              volumeMode:
+                description: VolumeMode is the bound claim's volume mode.
+                type: string
+              volumeName:
+                description: VolumeName is the bound PersistentVolume name.
+                type: string
+              volumeUID:
+                description: VolumeUID identifies the exact PersistentVolume observed
+                  by the controller.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

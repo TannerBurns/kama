@@ -83,6 +83,79 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: kama-fake-huggingface
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-fake-huggingface
+    app.kubernetes.io/instance: kind
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kama-fake-huggingface
+      app.kubernetes.io/instance: kind
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kama-fake-huggingface
+        app.kubernetes.io/instance: kind
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: server
+          image: KAMA_FIXTURES_IMAGE
+          imagePullPolicy: Never
+          command:
+            - /fake-huggingface-server
+          args:
+            - --listen-address=:8083
+          ports:
+            - name: http
+              containerPort: 8083
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+          resources:
+            requests:
+              cpu: 5m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kama-fake-huggingface
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-fake-huggingface
+    app.kubernetes.io/instance: kind
+spec:
+  selector:
+    app.kubernetes.io/name: kama-fake-huggingface
+    app.kubernetes.io/instance: kind
+  ports:
+    - name: http
+      port: 8083
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: kama-fake-llama
   namespace: kama-system
   labels:

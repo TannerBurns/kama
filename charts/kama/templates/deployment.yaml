@@ -18,9 +18,14 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.webhook.enabled .Values.podAnnotations }}
       annotations:
+        {{- if .Values.webhook.enabled }}
+        kama.tannerburns.github.io/webhook-certificate-revision: {{ .Release.Revision | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "kama.serviceAccountName" . }}
@@ -51,6 +56,18 @@ spec:
             - --metrics-bind-address=0
             {{- end }}
             - --leader-elect={{ .Values.leaderElection.enabled }}
+            - --enable-webhooks={{ .Values.webhook.enabled }}
+            - --importer-image={{ include "kama.importerImage" . }}
+            - --importer-image-pull-policy={{ .Values.importer.image.pullPolicy }}
+            {{- if .Values.importer.imagePullSecrets }}
+            - --importer-image-pull-secrets={{ include "kama.importerImagePullSecrets" . }}
+            {{- end }}
+            - --hub-endpoint={{ .Values.importer.hubEndpoint }}
+            {{- if .Values.webhook.enabled }}
+            - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
+            - --webhook-cert-name={{ .Values.webhook.tls.certName }}
+            - --webhook-cert-key={{ .Values.webhook.tls.keyName }}
+            {{- end }}
             {{- with .Values.extraArgs }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -65,6 +82,11 @@ spec:
             {{- if .Values.metrics.enabled }}
             - name: metrics
               containerPort: {{ .Values.metrics.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.webhook.enabled }}
+            - name: webhook
+              containerPort: {{ .Values.webhook.port }}
               protocol: TCP
             {{- end }}
           livenessProbe:
@@ -84,9 +106,24 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.webhook.enabled }}
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.webhook.enabled }}
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "kama.webhookTLSSecretName" . }}
+            items:
+              - key: {{ .Values.webhook.tls.certName }}
+                path: {{ .Values.webhook.tls.certName }}
+              - key: {{ .Values.webhook.tls.keyName }}
+                path: {{ .Values.webhook.tls.keyName }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

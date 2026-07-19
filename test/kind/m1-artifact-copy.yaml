@@ -1,0 +1,15 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: kind-copy
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: kind-cache
+  source:
+    persistentVolumeClaim:
+      claimName: kama-manual-models
+      rootPath: models
+      importPolicy: Copy

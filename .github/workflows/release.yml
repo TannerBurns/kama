@@ -22,6 +22,7 @@ jobs:
       packages: write
     env:
       MANAGER_IMAGE: ghcr.io/tannerburns/kama-manager
+      IMPORTER_IMAGE: ghcr.io/tannerburns/kama-importer
       FIXTURES_IMAGE: ghcr.io/tannerburns/kama-test-fixtures
       CHART_REPOSITORY: ghcr.io/tannerburns/charts
     steps:
@@ -86,6 +87,22 @@ jobs:
             SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
           provenance: mode=max
 
+      - name: Build and publish importer image
+        id: importer
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.importer
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMPORTER_IMAGE }}:${{ steps.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
+          provenance: mode=max
+
       - name: Build and publish fixture image
         id: fixtures
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -125,6 +142,8 @@ jobs:
           mkdir -p dist/sbom
           ./bin/syft "registry:${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}" \
             --output spdx-json=dist/sbom/kama-manager.spdx.json
+          ./bin/syft "registry:${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}" \
+            --output spdx-json=dist/sbom/kama-importer.spdx.json
           ./bin/syft "registry:${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}" \
             --output spdx-json=dist/sbom/kama-test-fixtures.spdx.json
           ./bin/syft "file:dist/kama-${{ steps.metadata.outputs.version }}.tgz" \
@@ -136,14 +155,17 @@ jobs:
           COSIGN_YES: "true"
         run: |
           manager_ref="${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}"
+          importer_ref="${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}"
           fixtures_ref="${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}"
           chart_ref="${CHART_REPOSITORY}/kama@${{ steps.chart.outputs.digest }}"
 
           ./bin/cosign sign "${manager_ref}"
+          ./bin/cosign sign "${importer_ref}"
           ./bin/cosign sign "${fixtures_ref}"
           ./bin/cosign sign "${chart_ref}"
 
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-manager.spdx.json "${manager_ref}"
+          ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-importer.spdx.json "${importer_ref}"
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-test-fixtures.spdx.json "${fixtures_ref}"
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-chart.spdx.json "${chart_ref}"
 

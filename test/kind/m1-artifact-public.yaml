@@ -1,0 +1,16 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: kind-public
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: kind-cache
+  source:
+    huggingFace:
+      repository: kama/public-gguf
+      revision: 0123456789abcdef0123456789abcdef01234567
+      files:
+        - model.gguf

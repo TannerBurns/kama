@@ -1,0 +1,15 @@
+# Populate the same-namespace PVC named manual-model-source before creating this object.
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: manual-copy
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: shared-models
+  source:
+    persistentVolumeClaim:
+      claimName: manual-model-source
+      rootPath: models
+      importPolicy: Copy

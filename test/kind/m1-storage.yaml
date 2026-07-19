@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kama-managed-cache
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kama-cache-local
+  local:
+    path: /var/local/kama-cache
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - KAMA_WORKER_NODE
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kama-manual-models
+spec:
+  capacity:
+    storage: 10Mi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kama-manual-local
+  local:
+    path: /var/local/kama-manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - KAMA_WORKER_NODE
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kama-manual-models
+  namespace: kama-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  storageClassName: kama-manual-local
+  resources:
+    requests:
+      storage: 10Mi

@@ -19,6 +19,10 @@ implemented independently without losing the system-level contract.
 | [09 - Verification and acceptance](09-verification-and-acceptance.md) | Test strategy, hardware/storage matrices, and release gates |
 | [10 - Decisions and open questions](10-decisions-and-open-questions.md) | Accepted decisions, defaults, risks, and validation items |
 
+Operator incident procedures live in [runbooks](../runbooks/README.md), and the
+current storage support evidence lives in
+[M1 storage qualification](../storage-qualification.md).
+
 ## Architecture at a glance
 
 ```text

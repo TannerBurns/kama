@@ -1,0 +1,13 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: kind-direct
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  source:
+    persistentVolumeClaim:
+      claimName: kama-manual-models
+      rootPath: models
+      importPolicy: Direct

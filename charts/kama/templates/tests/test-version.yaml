@@ -11,12 +11,35 @@ metadata:
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
+  {{- if or .Values.imagePullSecrets .Values.importer.imagePullSecrets }}
+  imagePullSecrets:
+    {{- range .Values.imagePullSecrets }}
+    - name: {{ if kindIs "string" . }}{{ . }}{{ else }}{{ .name }}{{ end }}
+    {{- end }}
+    {{- range .Values.importer.imagePullSecrets }}
+    - name: {{ if kindIs "string" . }}{{ . }}{{ else }}{{ .name }}{{ end }}
+    {{- end }}
+  {{- end }}
   securityContext:
     {{- toYaml .Values.podSecurityContext | nindent 4 }}
   containers:
     - name: version
       image: {{ include "kama.image" . | quote }}
       imagePullPolicy: {{ .Values.image.pullPolicy }}
+      args:
+        - --version
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        limits:
+          cpu: 20m
+          memory: 32Mi
+        requests:
+          cpu: 5m
+          memory: 16Mi
+    - name: importer-version
+      image: {{ include "kama.importerImage" . | quote }}
+      imagePullPolicy: {{ .Values.importer.image.pullPolicy }}
       args:
         - --version
       securityContext:

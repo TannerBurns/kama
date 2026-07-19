@@ -1,0 +1,120 @@
+{{- if .Values.webhook.enabled }}
+{{- $secretName := include "kama.webhookTLSSecretName" . -}}
+{{- $serviceName := include "kama.webhookServiceName" . -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $ca := genCA (printf "%s-ca" $serviceName) (int .Values.webhook.tls.caValidityDays) -}}
+{{- if and $existing (hasKey $existing.data "ca.crt") (hasKey $existing.data "ca.key") -}}
+{{- $ca = buildCustomCert (index $existing.data "ca.crt") (index $existing.data "ca.key") -}}
+{{- end -}}
+{{- $dnsNames := list $serviceName (printf "%s.%s" $serviceName .Release.Namespace) (printf "%s.%s.svc" $serviceName .Release.Namespace) (printf "%s.%s.svc.cluster.local" $serviceName .Release.Namespace) -}}
+{{- $cert := genSignedCert (printf "%s.%s.svc" $serviceName .Release.Namespace) nil $dnsNames (int .Values.webhook.tls.certificateValidityDays) $ca -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kama.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $ca.Cert | b64enc | quote }}
+  ca.key: {{ $ca.Key | b64enc | quote }}
+  {{ .Values.webhook.tls.certName }}: {{ $cert.Cert | b64enc | quote }}
+  {{ .Values.webhook.tls.keyName }}: {{ $cert.Key | b64enc | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kama.clusterScopedName" . }}-mutating
+  labels:
+    {{- include "kama.labels" . | nindent 4 }}
+    kama.tannerburns.github.io/release-namespace: {{ .Release.Namespace | quote }}
+webhooks:
+  - name: mmodelcache.kama.tannerburns.github.io
+    admissionReviewVersions: [v1]
+    clientConfig:
+      caBundle: {{ $ca.Cert | b64enc | quote }}
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-kama-tannerburns-github-io-v1alpha1-modelcache
+        port: 443
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    rules:
+      - apiGroups: [kama.tannerburns.github.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [modelcaches]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  - name: mmodelartifact.kama.tannerburns.github.io
+    admissionReviewVersions: [v1]
+    clientConfig:
+      caBundle: {{ $ca.Cert | b64enc | quote }}
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-kama-tannerburns-github-io-v1alpha1-modelartifact
+        port: 443
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    rules:
+      - apiGroups: [kama.tannerburns.github.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [modelartifacts]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kama.clusterScopedName" . }}-validating
+  labels:
+    {{- include "kama.labels" . | nindent 4 }}
+    kama.tannerburns.github.io/release-namespace: {{ .Release.Namespace | quote }}
+webhooks:
+  - name: vmodelcache.kama.tannerburns.github.io
+    admissionReviewVersions: [v1]
+    clientConfig:
+      caBundle: {{ $ca.Cert | b64enc | quote }}
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kama-tannerburns-github-io-v1alpha1-modelcache
+        port: 443
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups: [kama.tannerburns.github.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [modelcaches]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  - name: vmodelartifact.kama.tannerburns.github.io
+    admissionReviewVersions: [v1]
+    clientConfig:
+      caBundle: {{ $ca.Cert | b64enc | quote }}
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kama-tannerburns-github-io-v1alpha1-modelartifact
+        port: 443
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups: [kama.tannerburns.github.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [modelartifacts]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+{{- end }}

@@ -15,16 +15,20 @@ conversion-safe schemas.
 
 ### Spec responsibilities
 
-- Existing same-namespace PVC reference or a claim template.
-- Storage class and requested capacity when managed.
+- Exactly one of `storage.existingClaim.name` or `storage.claimTemplate`.
+- A managed template contains labels/annotations, storage class, access modes,
+  filesystem volume mode, and `resources.requests.storage`.
 - Layout: shared content-addressed cache by default; dedicated artifact claims may be
   added as a storage profile.
-- Retention policy, default `Retain`.
+- `retentionPolicy: Retain|Delete`, defaulting to `Retain`. Adopted claims may use
+  only `Retain`; `Delete` is limited to an unreferenced controller-created claim
+  whose ownership identity matches the cache UID.
 - Optional capacity watermarks and future node-cache policy.
 
 ### Status responsibilities
 
-- Bound claim, capacity, observed free-space report, and mount validation.
+- Bound claim and volume identity, capacity, observed free-space report, access
+  modes, volume/storage class, normalized PV node affinity, and mount validation.
 - `Ready`, `StorageUnavailable`, `InsufficientCapacity`, and `Degraded` conditions.
 - The controller never adopts ownership of a user-provided claim.
 
@@ -41,19 +45,34 @@ conversion-safe schemas.
 `Copy` is the safe default and publishes content into a `ModelCache`. `Direct` serves
 an adopted claim in place and permanently uses `Retain` ownership semantics.
 
+Hugging Face sources require a repository, revision, one or more file selectors, and
+an optional same-namespace token Secret name/key. `cacheRef` is required for Hugging
+Face and `Copy`, and forbidden for `Direct`. An artifact is limited to 128 selected
+files so status and Job results stay bounded.
+
 ### Identity and verification
 
 - Format and entrypoint.
 - Optional expected size and SHA-256; policy may require the expected digest.
 - Full resolved source revision, computed file digests, canonical manifest digest,
   size, architecture, quantization, and shard count in status.
-- Source and resolved content become immutable after `Ready`; a new revision is a
-  new artifact.
+- Source, storage, and verification fields become immutable when reconciliation
+  starts, before importer work is created; a new revision, cache, or model is a new
+  artifact. `expectedSHA256` is the file digest for one file and Kama's canonical
+  content-manifest digest for a shard set; `expectedSize` is aggregate bytes.
 
 ### Conditions
 
 `SourceResolved`, `StorageReady`, `Importing`, `Verified`, `Ready`, `InvalidGGUF`,
-`ChecksumMismatch`, `InsufficientStorage`, and `SourceUnavailable`.
+`ChecksumMismatch`, `MissingShard`, `InsufficientStorage`, and `SourceUnavailable`.
+
+Status includes the immutable Hub commit, sorted file identities, artifact digest,
+aggregate size, GGUF architecture/quantization/shard count, validation time, Job
+reference, and the serving location contract. The location carries claim, subpath,
+read-only requirement, access modes, mount scope, volume identity, and node affinity.
+Before importer creation the controller persists that storage identity; during
+deletion the status-only `cleanupOperationID` records validated transient cleanup and
+is not part of the serving contract.
 
 ## `ModelDeployment`
 

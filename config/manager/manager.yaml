@@ -62,12 +62,19 @@ spec:
         - /manager
         args:
           - --leader-elect
+          - --enable-webhooks=false
           - --health-probe-bind-address=:8081
+          - --importer-image=ghcr.io/tannerburns/kama-importer:0.1.0-dev.0
+          - --importer-image-pull-policy=IfNotPresent
+          - --hub-endpoint=https://huggingface.co
         image: ghcr.io/tannerburns/kama-manager:0.1.0-dev.0
         name: manager
         ports:
         - containerPort: 8081
           name: health
+          protocol: TCP
+        - containerPort: 9443
+          name: webhook-server
           protocol: TCP
         securityContext:
           readOnlyRootFilesystem: true

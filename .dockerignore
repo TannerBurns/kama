@@ -10,5 +10,12 @@
 !go.mod
 !go.sum
 
+# The non-production Hugging Face fixture embeds the project-owned GGUF corpus.
+!internal/testfixtures/gguf/testdata/**
+
+# Local toolchains and test caches may contain Go source but are never build input.
+bin/
+dist/
+
 # The build embeds the release version into binaries and OCI labels.
 !VERSION

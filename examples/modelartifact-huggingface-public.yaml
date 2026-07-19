@@ -1,0 +1,16 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: public-gguf
+spec:
+  format: GGUF
+  entrypoint: tinygemma3-Q8_0.gguf
+  cacheRef:
+    name: shared-models
+  source:
+    huggingFace:
+      repository: ggml-org/tinygemma3-GGUF
+      # Pinned example revision; review the model card/license before use.
+      revision: c287502cd9e278dac8eed805c112cce5d0081e0b
+      files:
+        - tinygemma3-Q8_0.gguf

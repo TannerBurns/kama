@@ -16,6 +16,7 @@ VERSION := $(shell tr -d '[:space:]' < VERSION)
 MODULE := github.com/TannerBurns/kama
 REGISTRY ?= ghcr.io/tannerburns
 IMG ?= $(REGISTRY)/kama-manager:$(VERSION)
+IMPORTER_IMG ?= $(REGISTRY)/kama-importer:$(VERSION)
 FIXTURES_IMG ?= $(REGISTRY)/kama-test-fixtures:$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
 CONTAINER_TOOL ?= docker
@@ -58,13 +59,21 @@ bootstrap: kubebuilder controller-gen envtest kustomize golangci-lint govulnchec
 ##@ Generation and quality
 
 .PHONY: manifests
-manifests: controller-gen ## Generate RBAC, webhook, and CRD manifests (empty for M0 APIs).
-	@mkdir -p config/crd/bases
-	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+manifests: controller-gen ## Generate M1 RBAC, webhook, and CRD manifests.
+	@mkdir -p config/crd/bases config/rbac config/webhook charts/kama/crds
+	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook \
+		'paths=./api/...;./internal/controller/...' \
+		output:rbac:artifacts:config=config/rbac \
+		output:crd:artifacts:config=config/crd/bases \
+		output:webhook:artifacts:config=config/webhook
+	install -m 0644 config/crd/bases/kama.tannerburns.github.io_modelcaches.yaml \
+		charts/kama/crds/kama.tannerburns.github.io_modelcaches.yaml
+	install -m 0644 config/crd/bases/kama.tannerburns.github.io_modelartifacts.yaml \
+		charts/kama/crds/kama.tannerburns.github.io_modelartifacts.yaml
 
 .PHONY: generate
-generate: controller-gen ## Generate Go API helpers (a deterministic no-op until M1 adds APIs).
-	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(COPYRIGHT_YEAR) paths="./..."
+generate: controller-gen ## Generate Go API helpers.
+	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt",year=$(COPYRIGHT_YEAR) paths="./api/..."
 
 .PHONY: fmt
 fmt: ## Format Go source files.
@@ -126,19 +135,21 @@ test-envtest: build setup-envtest ## Start a real envtest control plane and veri
 	$(GO) test -race -tags=integration ./test/integration -v
 
 .PHONY: test-kind
-test-kind: kind helm ## Run the M0 Helm, KEDA, fixture, and uninstall smoke suite on Kind.
+test-kind: kind helm ## Run the Helm, admission, KEDA, fixture, and uninstall smoke suite on Kind.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
 	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" KEDA_VERSION="$(KEDA_VERSION)" VERSION="$(VERSION)" \
-	IMG="$(IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" bash hack/test-kind.sh
+	IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" bash hack/test-kind.sh
 
 ##@ Build and packaging
 
 .PHONY: build
-build: ## Build the manager and test fixture binaries.
+build: ## Build the manager, importer, and test fixture binaries.
 	@mkdir -p "$(LOCALBIN)"
 	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/manager" ./cmd
+	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/kama-importer" ./cmd/importer
 	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/fake-llama-server" ./cmd/fake-llama-server
+	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/fake-huggingface-server" ./cmd/fake-huggingface-server
 	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/external-scaler" ./cmd/external-scaler
 
 .PHONY: run
@@ -146,13 +157,15 @@ run: ## Run the empty manager against the current kubeconfig.
 	$(GO) run -ldflags "$(LDFLAGS)" ./cmd
 
 .PHONY: container
-container: ## Build versioned manager and test-fixture container images.
+container: ## Build versioned manager, importer, and test-fixture container images.
 	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" -t "$(IMG)" -f Dockerfile .
+	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" -t "$(IMPORTER_IMG)" -f Dockerfile.importer .
 	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" -t "$(FIXTURES_IMG)" -f Dockerfile.test-fixtures .
 
 .PHONY: container-multiarch
 container-multiarch: ## Build and push multi-architecture images (release workflow only).
 	$(CONTAINER_TOOL) buildx build --push --platform "$(PLATFORMS)" --build-arg VERSION="$(VERSION)" -t "$(IMG)" -f Dockerfile .
+	$(CONTAINER_TOOL) buildx build --push --platform "$(PLATFORMS)" --build-arg VERSION="$(VERSION)" -t "$(IMPORTER_IMG)" -f Dockerfile.importer .
 	$(CONTAINER_TOOL) buildx build --push --platform "$(PLATFORMS)" --build-arg VERSION="$(VERSION)" -t "$(FIXTURES_IMG)" -f Dockerfile.test-fixtures .
 
 .PHONY: helm-validate
@@ -168,9 +181,10 @@ helm-package: helm helm-validate ## Package the chart with version and appVersio
 supply-chain-tools: syft cosign ## Install pinned SBOM and signing tools.
 
 .PHONY: sbom
-sbom: syft ## Generate SPDX JSON SBOMs for both local images.
+sbom: syft ## Generate SPDX JSON SBOMs for all local images.
 	@mkdir -p "$(DIST)/sbom"
 	"$(SYFT)" "docker:$(IMG)" -o "spdx-json=$(DIST)/sbom/kama-manager.spdx.json"
+	"$(SYFT)" "docker:$(IMPORTER_IMG)" -o "spdx-json=$(DIST)/sbom/kama-importer.spdx.json"
 	"$(SYFT)" "docker:$(FIXTURES_IMG)" -o "spdx-json=$(DIST)/sbom/kama-test-fixtures.spdx.json"
 
 .PHONY: sign
@@ -179,11 +193,11 @@ sign: cosign ## Sign an immutable OCI reference supplied as IMAGE_DIGEST.
 	"$(COSIGN)" sign --yes "$${IMAGE_DIGEST}"
 
 .PHONY: release-check
-release-check: build helm-package ## Verify VERSION, manager binary, Dockerfile pins, and packaged chart metadata agree.
-	CHECK_BINARY=1 VERSION="$(VERSION)" IMG="$(IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" HELM="$(HELM)" DIST="$(DIST)" bash hack/release-check.sh
+release-check: build helm-package ## Verify VERSION, binaries, Dockerfile pins, and packaged chart metadata agree.
+	CHECK_BINARY=1 VERSION="$(VERSION)" IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" HELM="$(HELM)" DIST="$(DIST)" bash hack/release-check.sh
 
 .PHONY: verify
-verify: fmt-check vet lint test test-envtest vuln-check license-check workflow-check helm-validate release-check verify-generated ## Run all non-container M0 verification gates.
+verify: fmt-check vet lint test test-envtest vuln-check license-check workflow-check helm-validate release-check verify-generated ## Run all non-container verification gates.
 
 ##@ Tool installation
 

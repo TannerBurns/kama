@@ -1,9 +1,13 @@
 Kama {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
 
-Wait for the empty M0 manager to become ready:
+Wait for the Kama manager to become ready:
 
   kubectl rollout status deployment/{{ include "kama.fullname" . }} -n {{ .Release.Namespace }}
 
 Run the chart smoke test:
 
   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+Create a ModelCache and ModelArtifact from the examples directory, then inspect them:
+
+  kubectl get modelcaches,modelartifacts -A

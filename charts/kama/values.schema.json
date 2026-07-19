@@ -16,6 +16,39 @@
         "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
       }
     },
+    "importer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image", "imagePullSecrets", "hubEndpoint"],
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "digest", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "digest": { "type": "string", "pattern": "^(|sha256:[a-f0-9]{64})$" },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name"],
+                "properties": { "name": { "type": "string", "minLength": 1 } }
+              }
+            ]
+          }
+        },
+        "hubEndpoint": { "type": "string", "format": "uri", "pattern": "^https?://" }
+      }
+    },
     "imagePullSecrets": {
       "type": "array",
       "items": {
@@ -70,6 +103,33 @@
       "additionalProperties": false,
       "required": ["port"],
       "properties": { "port": { "type": "integer", "minimum": 1, "maximum": 65535 } }
+    },
+    "webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "port", "failurePolicy", "timeoutSeconds", "tls"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "port": { "enum": [9443] },
+        "failurePolicy": { "enum": ["Fail"] },
+        "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 30 },
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secretName", "caValidityDays", "certificateValidityDays", "certName", "keyName"],
+          "properties": {
+            "secretName": {
+              "type": "string",
+              "maxLength": 63,
+              "pattern": "^(|[a-z0-9]([-a-z0-9]*[a-z0-9])?)$"
+            },
+            "caValidityDays": { "type": "integer", "minimum": 366 },
+            "certificateValidityDays": { "type": "integer", "minimum": 1 },
+            "certName": { "enum": ["tls.crt"] },
+            "keyName": { "enum": ["tls.key"] }
+          }
+        }
+      }
     },
     "service": {
       "type": "object",
