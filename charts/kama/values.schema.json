@@ -5,6 +5,7 @@
   "properties": {
     "replicaCount": { "type": "integer", "minimum": 1 },
     "revisionHistoryLimit": { "type": "integer", "minimum": 0 },
+    "minReadySeconds": { "type": "integer", "minimum": 0 },
     "image": {
       "type": "object",
       "additionalProperties": false,

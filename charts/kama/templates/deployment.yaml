@@ -8,6 +8,15 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  minReadySeconds: {{ .Values.minReadySeconds }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Admission is fail-closed, so keep the previous webhook endpoint serving
+      # until its replacement has been Ready long enough for endpoint updates to
+      # propagate to the API server.
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       {{- include "kama.selectorLabels" . | nindent 6 }}

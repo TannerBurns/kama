@@ -41,6 +41,11 @@ cleanup() {
   if [[ ${exit_code} -ne 0 && ${cluster_created} -eq 1 ]]; then
     "${kubectl_bin}" get pods -A -o wide || true
     "${kubectl_bin}" -n "${namespace}" describe pods || true
+    "${kubectl_bin}" -n "${namespace}" get service kama-webhook -o yaml || true
+    "${kubectl_bin}" -n "${namespace}" get endpointslice \
+      -l kubernetes.io/service-name=kama-webhook -o yaml || true
+    "${kubectl_bin}" -n "${namespace}" logs deployment/kama \
+      --all-containers=true --prefix=true --tail=200 || true
   fi
   if [[ ${cluster_created} -eq 1 && "${KEEP_KIND_CLUSTER:-0}" != "1" ]]; then
     "${kind_bin}" delete cluster --name "${cluster_name}" || true
@@ -186,6 +191,16 @@ chart_package="${repo_root}/dist/kama-${version}.tgz"
   --wait \
   --timeout 2m
 "${kubectl_bin}" -n "${namespace}" rollout status deployment/kama --timeout=2m
+manager_rollout_json="$("${kubectl_bin}" -n "${namespace}" get deployment kama -o json)"
+if ! jq -e '
+  .spec.minReadySeconds == 10 and
+  .spec.strategy.type == "RollingUpdate" and
+  .spec.strategy.rollingUpdate.maxUnavailable == 0 and
+  .spec.strategy.rollingUpdate.maxSurge == 1
+' <<<"${manager_rollout_json}" >/dev/null; then
+  echo "manager rollout policy does not preserve a ready admission endpoint" >&2
+  exit 1
+fi
 "${helm_bin}" test kama --namespace "${namespace}" --timeout 2m
 
 "${kubectl_bin}" wait --for=condition=Established \
@@ -292,7 +307,13 @@ if [[ -z "${initial_webhook_leaf}" ]] || [[ "${upgraded_webhook_leaf}" == "${ini
   echo "Helm upgrade did not refresh the webhook serving certificate" >&2
   exit 1
 fi
-"${kubectl_bin}" -n "${namespace}" create --dry-run=server -f - >/dev/null <<'EOF'
+post_upgrade_admission_ready=0
+post_upgrade_admission_log="${tmp_dir}/post-upgrade-admission.log"
+# A failed request may consume the 10-second webhook timeout. Eight attempts
+# keep the convergence window bounded below two minutes.
+for _ in $(seq 1 8); do
+  if "${kubectl_bin}" -n "${namespace}" create --dry-run=server -f - \
+    >/dev/null 2>"${post_upgrade_admission_log}" <<'EOF'
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelCache
 metadata:
@@ -302,6 +323,17 @@ spec:
     existingClaim:
       name: admission-only
 EOF
+  then
+    post_upgrade_admission_ready=1
+    break
+  fi
+  sleep 2
+done
+if [[ ${post_upgrade_admission_ready} -ne 1 ]]; then
+  echo "admission did not recover after the webhook certificate-refresh rollout:" >&2
+  sed -n '1,20p' "${post_upgrade_admission_log}" >&2
+  exit 1
+fi
 
 "${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-cache.yaml"
 wait_for_condition modelcache kind-cache Ready 5m

@@ -1,5 +1,9 @@
 replicaCount: 1
 revisionHistoryLimit: 3
+# Hold a replacement manager Ready before retiring the previous fail-closed
+# admission endpoint. This gives EndpointSlice and API-server routing time to
+# converge during certificate-refresh upgrades.
+minReadySeconds: 10
 
 image:
   repository: ghcr.io/tannerburns/kama-manager

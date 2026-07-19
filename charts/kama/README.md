@@ -28,11 +28,14 @@ Important values:
 | `importer.hubEndpoint` | `https://huggingface.co` | Operator-wide Hugging Face endpoint; CRs cannot override it |
 | `webhook.enabled` | `true` | Install and start fail-closed v1alpha1 admission |
 | `webhook.tls.secretName` | `<fullname>-webhook-tls` | Helm-owned CA and leaf Secret |
+| `minReadySeconds` | `10` | Keep a replacement manager ready before retiring the previous admission endpoint |
 
 Empty image tags use the chart `appVersion`; a digest overrides its corresponding
 tag. On upgrade, Helm reads the existing webhook Secret, preserves its CA, signs a
 fresh serving leaf, updates both admission CA bundles, and rolls the manager. Keep
-the Secret readable by Helm during upgrades, and perform an upgrade before
+the Secret readable by Helm during upgrades. The manager uses a zero-unavailable
+rolling update and a readiness hold so API-server webhook routing can converge before
+the prior endpoint exits. Perform an upgrade before
 `webhook.tls.certificateValidityDays` elapses because M1 has no autonomous leaf
 renewal. For a planned CA rotation, delete the TLS Secret and immediately run a Helm
 upgrade during a maintenance window; fail-closed admission may be briefly unavailable
