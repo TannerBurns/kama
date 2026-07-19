@@ -4,9 +4,39 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - "charts/**"
+      - "cmd/**"
+      - "config/**"
+      - "hack/**"
+      - "internal/**"
+      - "test/**"
+      - .dockerignore
+      - .go-version
+      - "Dockerfile*"
+      - Makefile
+      - PROJECT
+      - VERSION
+      - go.mod
+      - go.sum
   push:
     branches:
       - main
+    paths:
+      - "charts/**"
+      - "cmd/**"
+      - "config/**"
+      - "hack/**"
+      - "internal/**"
+      - "test/**"
+      - .dockerignore
+      - .go-version
+      - "Dockerfile*"
+      - Makefile
+      - PROJECT
+      - VERSION
+      - go.mod
+      - go.sum
   workflow_dispatch:
 
 permissions:
@@ -44,7 +74,7 @@ jobs:
           cache: true
 
       - name: Install pinned Kind, Helm, and build tools
-        run: make bootstrap
+        run: make kind helm
 
       - name: Run install, activation, fixture, and uninstall smoke
         env:

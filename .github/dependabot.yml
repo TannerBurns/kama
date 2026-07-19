@@ -1,17 +1,54 @@
 version: 2
+# Keep routine maintenance predictable: one grouped version PR per ecosystem each
+# month. Security updates remain advisory-driven and are grouped separately.
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+      time: "09:00"
+      timezone: America/Chicago
+    open-pull-requests-limit: 1
+    rebase-strategy: disabled
+    groups:
+      go-version-updates:
+        patterns:
+          - "*"
+      go-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+      time: "09:15"
+      timezone: America/Chicago
+    open-pull-requests-limit: 1
+    rebase-strategy: disabled
+    groups:
+      actions-version-updates:
+        patterns:
+          - "*"
+      actions-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
+      interval: monthly
+      time: "09:30"
+      timezone: America/Chicago
+    open-pull-requests-limit: 1
+    rebase-strategy: disabled
+    groups:
+      container-version-updates:
+        patterns:
+          - "*"
+      container-security-updates:
+        applies-to: security-updates
+        patterns:
+          - "*"
