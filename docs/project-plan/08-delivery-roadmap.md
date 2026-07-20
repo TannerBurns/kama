@@ -50,12 +50,15 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 
 ## M1 - Persistent artifact plane
 
-**Status: In Progress.** The repository-scoped implementation deliverables and
-fixture-backed CI/Kind gates are complete. Milestone acceptance now requires one
-immutable successful run of the self-contained M1 functional workflow. That run is
-still pending, so every definition-of-done item below stays unchecked. Qualification
-of a named production CSI driver/backend is a separate compatibility and release
-gate; it does not block M1 functional acceptance.
+**Status: In Progress.** The repository-scoped implementation, CI/Kind gates, pinned
+public Hugging Face lane, and functional storage/failure lanes are verified at
+[`5a7390176fd6eecf37a5f6803197a87abe92fa40`](https://github.com/TannerBurns/kama/commit/5a7390176fd6eecf37a5f6803197a87abe92fa40)
+and [workflow run 29763107454](https://github.com/TannerBurns/kama/actions/runs/29763107454).
+M1 remains open only because the required project-controlled private Hugging Face
+repository and read-only token are not configured, so the successful live job
+correctly recorded `qualifying=false`. Qualification of a named production CSI
+driver/backend is a separate compatibility and release gate; it does not block M1
+functional acceptance.
 
 ### Deliverables
 
@@ -68,9 +71,10 @@ gate; it does not block M1 functional acceptance.
 ### Definition of done
 
 - [ ] A pinned public/private Hugging Face artifact imports once and remains ready across
-  controller and Job restarts.
-- [ ] Manual RWX and RWO artifacts validate and surface correct placement constraints.
-- [ ] Corrupt, incomplete, unauthorized, and storage-full cases fail safely.
+  controller and Job restarts. The pinned public SmolLM2 artifact passes; the private
+  lane remains pending.
+- [x] Manual RWX and RWO artifacts validate and surface correct placement constraints.
+- [x] Corrupt, incomplete, unauthorized, and storage-full cases fail safely.
 
 Design: [model storage](04-model-artifacts-and-storage.md).
 Evidence checklist: [M1 acceptance](../acceptance/m1.md).

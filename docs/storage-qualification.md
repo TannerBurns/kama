@@ -24,13 +24,14 @@ CSI driver/backend.
 
 ## M1 functional CI results
 
-Record a qualifying self-contained workflow run here after it passes every M1
-storage scenario. This table records functional semantics only and is not a
-production support matrix.
+Record a successful self-contained workflow storage job here after it passes every
+M1 storage scenario. The storage result can be recorded while the independent
+private Hugging Face lane remains open; this table records functional semantics only,
+not overall milestone qualification or a production support matrix.
 
 | Date | Commit | Workflow run | Kubernetes | Test driver/service | RWX cross-node | RWO topology | ENOSPC and publication safety | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| Pending | - | - | - | - | - | - | - | M1 functional workflow not yet verified |
+| 2026-07-20 | [`5a73901`](https://github.com/TannerBurns/kama/commit/5a7390176fd6eecf37a5f6803197a87abe92fa40) | [run 29763107454 / job 88422393596](https://github.com/TannerBurns/kama/actions/runs/29763107454/job/88422393596) | 1.36.1 | NFS CSI 4.13.4 with in-runner NFS service | Pass: two-node concurrent read-only checksum and `mmap` | Pass: matching node scheduled; wrong node rejected by PV affinity | Pass: real tmpfs ENOSPC; ready bytes/status unchanged | `m1-functional-29763107454-1` |
 
 ## Named production compatibility results
 
