@@ -127,6 +127,35 @@ EOF
   return 1
 }
 
+apply_with_admission_retry() {
+  local manifest=$1
+  local apply_context=$2
+  local attempt
+  local admission_log="${tmp_dir}/admission-apply.log"
+
+  # A rollout can leave an older API server connection pointed at the retired
+  # webhook endpoint briefly after the readiness probe succeeds. `kubectl apply`
+  # is idempotent, so retry only those transport failures; a policy, schema, or
+  # RBAC rejection must still fail immediately.
+  for attempt in $(seq 1 5); do
+    if "${kubectl_bin}" apply -f "${manifest}" 2>"${admission_log}"; then
+      return 0
+    fi
+    if ! grep -Eq \
+      'failed calling webhook|no endpoints available|connection refused|context deadline exceeded|TLS handshake timeout' \
+      "${admission_log}"; then
+      break
+    fi
+    if [[ ${attempt} -lt 5 ]]; then
+      sleep 2
+    fi
+  done
+
+  echo "admission-backed apply failed during ${apply_context}:" >&2
+  sed -n '1,20p' "${admission_log}" >&2
+  return 1
+}
+
 if "${kind_bin}" get clusters | grep -Fxq "${cluster_name}"; then
   echo "Kind cluster ${cluster_name} already exists; choose a disposable KIND_CLUSTER" >&2
   exit 1
@@ -455,7 +484,9 @@ curl --fail --silent --show-error \
   --header 'Content-Type: application/json' \
   --data '{"target":"kama/public-gguf/model.gguf","pauseAfterBytes":64}' \
   http://127.0.0.1:18083/state/fault >/dev/null
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-artifact-resume.yaml"
+apply_with_admission_retry \
+  "${repo_root}/test/kind/m1-artifact-resume.yaml" \
+  "the post-restart resumable-import scenario"
 
 resume_state=""
 for _ in $(seq 1 120); do
