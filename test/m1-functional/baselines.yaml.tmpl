@@ -1,0 +1,60 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-rwx-baseline
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: m1-functional-rwx
+  verification:
+    expectedSHA256: "0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94"
+    expectedSize: 180
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Copy
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-rwo-direct
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  verification:
+    expectedSHA256: "0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94"
+    expectedSize: 180
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Direct
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-full-baseline
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: m1-functional-full
+  verification:
+    expectedSHA256: "0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94"
+    expectedSize: 180
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Copy

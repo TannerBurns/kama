@@ -8,6 +8,8 @@ kind_bin="${KIND:-${repo_root}/bin/kind}"
 kubectl_bin="${KUBECTL:-kubectl}"
 helm_bin="${HELM:-${repo_root}/bin/helm}"
 keda_version="${KEDA_VERSION:-2.20.0}"
+nfs_csi_version="${NFS_CSI_VERSION:-4.13.4}"
+nfs_server_image="${NFS_SERVER_IMAGE:-docker.io/itsthenetwork/nfs-server-alpine:12@sha256:79f203edfcf81e8ef27e81ca47049d8b3e6007969337b808a49288317b6a26c3}"
 cluster_name="${KIND_CLUSTER:-kama}"
 node_image="${KIND_NODE_IMAGE:?KIND_NODE_IMAGE must be a digest-pinned Kind node image}"
 namespace="kama-system"
@@ -509,6 +511,10 @@ if [[ "${resume_attempts}" != "2" || "${resume_ranges}" != "1" || \
   echo "interrupted import did not perform one full attempt and one successful Range resume: ${resumed_state}" >&2
   exit 1
 fi
+if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
+  mkdir -p "${repo_root}/dist/m1-functional"
+  jq -S . <<<"${resumed_state}" >"${repo_root}/dist/m1-functional/hub-request-evidence.json"
+fi
 
 completed_job_uid="$("${kubectl_bin}" -n "${namespace}" get job "${resume_job}" \
   -o jsonpath='{.metadata.uid}')"
@@ -639,6 +645,10 @@ if ! metric_sample_has_labels kama_model_artifact_validation_duration_seconds_co
   echo "manager metrics are missing successful Hub validation timing" >&2
   exit 1
 fi
+if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
+  mkdir -p "${repo_root}/dist/m1-functional"
+  printf '%s\n' "${metrics_payload}" >"${repo_root}/dist/m1-functional/manager-metrics.prom"
+fi
 
 "${kubectl_bin}" -n "${namespace}" port-forward service/kama-fake-llama 18080:8080 \
   >"${tmp_dir}/fake-llama-port-forward.log" 2>&1 &
@@ -652,6 +662,66 @@ completion="$(curl --fail --silent --show-error \
 if ! grep -Fq '"choices"' <<<"${completion}"; then
   echo "fake llama-server completion response did not contain choices" >&2
   exit 1
+fi
+
+if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
+  "${helm_bin}" repo add csi-driver-nfs \
+    https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts \
+    --force-update
+  "${helm_bin}" repo update csi-driver-nfs
+  "${helm_bin}" upgrade --install m1-nfs-csi csi-driver-nfs/csi-driver-nfs \
+    --namespace kube-system \
+    --version "${nfs_csi_version}" \
+    --wait \
+    --timeout 5m
+  "${kubectl_bin}" -n kube-system rollout status deployment/csi-nfs-controller --timeout=3m
+  "${kubectl_bin}" -n kube-system rollout status daemonset/csi-nfs-node --timeout=3m
+
+  sed \
+    -e "s|M1_NFS_SERVER_IMAGE|${nfs_server_image}|g" \
+    -e "s|M1_WORKER_NODE|${worker_node}|g" \
+    "${repo_root}/test/m1-functional/nfs.yaml.tmpl" >"${tmp_dir}/m1-functional-nfs.yaml"
+  "${kubectl_bin}" apply -f "${tmp_dir}/m1-functional-nfs.yaml"
+  "${kubectl_bin}" -n "${namespace}" rollout status deployment/m1-functional-nfs --timeout=2m
+
+  M1_RWX_STORAGE_CLASS=m1-functional-nfs \
+    M1_RWX_CSI_DRIVER=nfs.csi.k8s.io \
+    M1_FUNCTIONAL_HELPER_IMAGE="local/kama-m1-functional-helper:${version}" \
+    M1_EVIDENCE_DIR="${repo_root}/dist/m1-functional" \
+    KIND="${kind_bin}" KUBECTL="${kubectl_bin}" KIND_CLUSTER="${cluster_name}" \
+    bash "${repo_root}/hack/test-m1-functional.sh"
+  curl --fail --silent --show-error http://127.0.0.1:18084/metrics \
+    >"${repo_root}/dist/m1-functional/manager-metrics-after-functional.prom"
+  "${kubectl_bin}" version -o json >"${repo_root}/dist/m1-functional/kubernetes-version.json"
+  "${helm_bin}" list --namespace kube-system --filter '^m1-nfs-csi$' --output json \
+    >"${repo_root}/dist/m1-functional/nfs-csi-release.json"
+  "${kubectl_bin}" -n kube-system get deployment/csi-nfs-controller daemonset/csi-nfs-node \
+    -o json | jq '{items: [.items[] | {
+      kind,
+      metadata: {name: .metadata.name},
+      images: [.spec.template.spec.containers[].image]
+    }]}' >"${repo_root}/dist/m1-functional/nfs-csi-images.json"
+  required_evidence=(
+    summary.json
+    resources.yaml
+    events.txt
+    rwx-pv.yaml
+    reader-m1-rwx-reader-worker.log
+    reader-m1-rwx-reader-control.log
+    enospc-fill.log
+    hub-request-evidence.json
+    manager-metrics-after-functional.prom
+    kubernetes-version.json
+    nfs-csi-release.json
+    nfs-csi-images.json
+    nfs-server-deployment.yaml
+  )
+  for evidence_file in "${required_evidence[@]}"; do
+    if [[ ! -s "${repo_root}/dist/m1-functional/${evidence_file}" ]]; then
+      echo "M1 functional evidence is missing or empty: ${evidence_file}" >&2
+      exit 1
+    fi
+  done
 fi
 
 "${helm_bin}" uninstall kama --namespace "${namespace}" --wait

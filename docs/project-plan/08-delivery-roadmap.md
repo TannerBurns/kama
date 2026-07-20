@@ -51,9 +51,11 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 ## M1 - Persistent artifact plane
 
 **Status: In Progress.** The repository-scoped implementation deliverables and
-fixture-backed CI/Kind gates are complete. That is not milestone acceptance: the
-strict live Hugging Face/production-CSI evidence remains pending, so every
-definition-of-done item below stays unchecked.
+fixture-backed CI/Kind gates are complete. Milestone acceptance now requires one
+immutable successful run of the self-contained M1 functional workflow. That run is
+still pending, so every definition-of-done item below stays unchecked. Qualification
+of a named production CSI driver/backend is a separate compatibility and release
+gate; it does not block M1 functional acceptance.
 
 ### Deliverables
 
@@ -72,6 +74,7 @@ definition-of-done item below stays unchecked.
 
 Design: [model storage](04-model-artifacts-and-storage.md).
 Evidence checklist: [M1 acceptance](../acceptance/m1.md).
+Named storage compatibility results: [storage qualification](../storage-qualification.md).
 
 ## M2 - Baseline single-replica serving
 

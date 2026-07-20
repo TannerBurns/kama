@@ -1,0 +1,137 @@
+name: M1 functional acceptance
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "api/**"
+      - "charts/**"
+      - "cmd/**"
+      - "config/**"
+      - "hack/**"
+      - "internal/**"
+      - "test/kind/**"
+      - "test/live/**"
+      - "test/m1-functional/**"
+      - .go-version
+      - "Dockerfile*"
+      - Makefile
+      - VERSION
+      - go.mod
+      - go.sum
+      - .github/workflows/m1-live.yml
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: m1-live-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-dispatch:
+    name: Manual qualification ref
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require the trusted main branch
+        env:
+          QUALIFICATION_REF: ${{ github.ref }}
+        run: |
+          if [[ "${QUALIFICATION_REF}" != "refs/heads/main" ]]; then
+            echo "M1 qualification dispatches must select the main branch" >&2
+            exit 1
+          fi
+
+  functional-storage:
+    name: Kubernetes 1.36 / storage and failure injection
+    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      KIND_CLUSTER: kama-m1-functional-${{ github.run_id }}-${{ github.run_attempt }}
+      KIND_NODE_IMAGE: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+      KEDA_VERSION: 2.20.0
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned Kind and Helm
+        run: make kind helm
+
+      - name: Run deterministic M1 storage and failure qualification
+        run: make test-m1-functional K8S_MINOR=1.36
+
+      - name: Upload functional qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m1-functional-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/m1-functional/
+          if-no-files-found: error
+          retention-days: 90
+
+  live-huggingface:
+    name: Kubernetes 1.36 / live Hugging Face
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: m1-live
+    outputs:
+      qualifying: ${{ steps.live.outputs.qualifying }}
+    env:
+      KIND_CLUSTER: kama-m1-live-${{ github.run_id }}-${{ github.run_attempt }}
+      KIND_NODE_IMAGE: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+      EVIDENCE_DIR: dist/m1-live
+      # Configure HF_TOKEN as a protected, read-only environment secret. The
+      # accompanying artifact identity is non-secret environment metadata.
+      M1_PRIVATE_HF_REPOSITORY: ${{ vars.M1_PRIVATE_HF_REPOSITORY }}
+      M1_PRIVATE_HF_REVISION: ${{ vars.M1_PRIVATE_HF_REVISION }}
+      M1_PRIVATE_HF_FILE: ${{ vars.M1_PRIVATE_HF_FILE }}
+      M1_PRIVATE_HF_SHA256: ${{ vars.M1_PRIVATE_HF_SHA256 }}
+      M1_PRIVATE_HF_SIZE: ${{ vars.M1_PRIVATE_HF_SIZE }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned Kind and Helm
+        run: make kind helm
+
+      - name: Run live import and cache-recovery qualification
+        id: live
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          # Scheduled/manual executions are strict qualification runs. Trusted
+          # main pushes remain a public live-source regression until configured.
+          M1_REQUIRE_PRIVATE: ${{ github.event_name != 'push' }}
+        run: bash hack/test-m1-live.sh
+
+      - name: Upload qualification evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: m1-live-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/m1-live/
+          if-no-files-found: error
+          retention-days: 90

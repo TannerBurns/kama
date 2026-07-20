@@ -1,0 +1,92 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-checksum-mismatch
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: m1-functional-rwx
+  verification:
+    expectedSHA256: "0000000000000000000000000000000000000000000000000000000000000000"
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Copy
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-malformed
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: malformed.gguf
+  cacheRef:
+    name: m1-functional-rwx
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Copy
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-truncated
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: truncated.gguf
+  cacheRef:
+    name: m1-functional-rwx
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Copy
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-incomplete
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: model-00001-of-00002.gguf
+  cacheRef:
+    name: m1-functional-rwx
+  source:
+    persistentVolumeClaim:
+      claimName: m1-functional-source
+      rootPath: models
+      importPolicy: Copy
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-unauthorized
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  cacheRef:
+    name: m1-functional-rwx
+  source:
+    huggingFace:
+      repository: kama/private-gguf
+      revision: 0123456789abcdef0123456789abcdef01234567
+      files:
+        - model.gguf

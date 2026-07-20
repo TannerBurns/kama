@@ -34,6 +34,21 @@ fixtures used.
 - Kind clusters for installation, namespace isolation, NetworkPolicy manifests,
   gateway failover, KEDA activation, upgrade, and uninstall retention.
 
+### Self-contained M1 functional acceptance
+
+- A trusted hosted-runner workflow creates a two-node Kubernetes cluster and all
+  functional storage services inside the runner, then imports immutable public and
+  project-controlled private Hugging Face artifacts.
+- Importer and manager interruptions prove local recovery without another artifact
+  transfer. Runner-scoped request evidence is used instead of aggregate Hub download
+  counters.
+- Functional RWX cross-node reads, adopted RWO topology, corruption, incomplete
+  content, authorization failure, and actual filesystem exhaustion are exercised in
+  one evidence-producing workflow.
+- A passing immutable run closes M1 functional acceptance. It does not qualify or
+  advertise a named production CSI driver, backend, durability level, or performance
+  profile.
+
 ### Real hardware end-to-end tests
 
 - CPU-only Linux node.
@@ -119,6 +134,19 @@ For each supported hardware/storage profile, record:
 Balanced-policy benchmark selection must be reproducible from the published profile
 measurements.
 
+## Named storage compatibility qualification
+
+A production CSI driver/backend becomes a supported named configuration only after a
+protected workflow or repeatable operator-run procedure passes the M1 filesystem
+floor, cross-node access and topology scenarios, restart recovery, and measured
+import/load checks against that exact Kubernetes version, driver version, backend,
+and mount configuration. Results are recorded in
+[storage qualification](../storage-qualification.md) and must not be generalized.
+
+This compatibility work is independent of M1 functional completion. It remains a
+release gate wherever a beta or v1 release claims support for the named storage
+configuration.
+
 ## Failure injection
 
 - Kill manager leaders, gateway/scaler replicas, importer/profiler Jobs, llama-server
@@ -159,5 +187,6 @@ Each implementation PR identifies its project-plan module, work package/mileston
 acceptance scenario, and affected decision IDs. A behavior change is incomplete until
 its plan, tests, and operator-facing documentation agree.
 
-The M1 evidence checklist and separation between fixture coverage and strict live
-source/CSI qualification are tracked in [M1 acceptance](../acceptance/m1.md).
+The M1 evidence checklist and separation between fixture coverage, self-contained
+functional acceptance, and named production storage qualification are tracked in
+[M1 acceptance](../acceptance/m1.md).

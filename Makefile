@@ -138,8 +138,21 @@ test-envtest: build setup-envtest ## Start a real envtest control plane and veri
 test-kind: kind helm ## Run the Helm, admission, KEDA, fixture, and uninstall smoke suite on Kind.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
 	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
-	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" KEDA_VERSION="$(KEDA_VERSION)" VERSION="$(VERSION)" \
-	IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" bash hack/test-kind.sh
+	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" KEDA_VERSION="$(KEDA_VERSION)" \
+	NFS_CSI_VERSION="$(NFS_CSI_VERSION)" NFS_SERVER_IMAGE="$(NFS_SERVER_IMAGE)" VERSION="$(VERSION)" \
+	M1_FUNCTIONAL_ACCEPTANCE="$(M1_FUNCTIONAL_ACCEPTANCE)" IMG="$(IMG)" \
+	IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" bash hack/test-kind.sh
+
+.PHONY: test-m1-functional
+test-m1-functional: ## Run the one-minor, self-contained M1 storage/failure acceptance suite on Kind.
+	$(MAKE) test-kind M1_FUNCTIONAL_ACCEPTANCE=1
+
+.PHONY: test-m1-live
+test-m1-live: kind helm ## Run live Hugging Face import/recovery; private qualification uses protected environment configuration.
+	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
+	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" VERSION="$(VERSION)" IMG="$(IMG)" \
+	IMPORTER_IMG="$(IMPORTER_IMG)" bash hack/test-m1-live.sh
 
 ##@ Build and packaging
 

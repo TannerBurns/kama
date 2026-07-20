@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m1-functional-nfs
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-m1-functional-nfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kama-m1-functional-nfs
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kama-m1-functional-nfs
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      nodeSelector:
+        kubernetes.io/hostname: M1_WORKER_NODE
+      containers:
+        - name: nfs
+          image: M1_NFS_SERVER_IMAGE
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SHARED_DIRECTORY
+              value: /exports
+          ports:
+            - name: nfs-tcp
+              containerPort: 2049
+              protocol: TCP
+            - name: rpcbind-tcp
+              containerPort: 111
+              protocol: TCP
+            - name: rpcbind-udp
+              containerPort: 111
+              protocol: UDP
+          readinessProbe:
+            tcpSocket:
+              port: nfs-tcp
+            periodSeconds: 2
+            timeoutSeconds: 1
+            failureThreshold: 60
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: exports
+              mountPath: /exports
+      volumes:
+        - name: exports
+          emptyDir:
+            sizeLimit: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: m1-functional-nfs
+  namespace: kama-system
+  labels:
+    app.kubernetes.io/name: kama-m1-functional-nfs
+spec:
+  selector:
+    app.kubernetes.io/name: kama-m1-functional-nfs
+  ports:
+    - name: nfs-tcp
+      port: 2049
+      targetPort: nfs-tcp
+      protocol: TCP
+    - name: rpcbind-tcp
+      port: 111
+      targetPort: rpcbind-tcp
+      protocol: TCP
+    - name: rpcbind-udp
+      port: 111
+      targetPort: rpcbind-udp
+      protocol: UDP
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: m1-functional-nfs
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+provisioner: nfs.csi.k8s.io
+parameters:
+  server: m1-functional-nfs.kama-system.svc.cluster.local
+  share: /
+  mountPermissions: "0777"
+  onDelete: delete
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+mountOptions:
+  - nfsvers=4.1

@@ -5,8 +5,9 @@ Secrets, caches, and artifacts together in the same namespace.
 
 1. Install Kama and choose a namespace for model resources.
 2. Edit storage class, PVC, and private-repository/Secret placeholders. The public
-   example is pinned to an immutable model revision; review its model card, size,
-   and license before use. Hugging Face revisions should be full immutable
+   example is the Apache-2.0 SmolLM2 360M Q8_0 GGUF used by Kama's live CI and is
+   pinned to an immutable revision, exact size, and SHA-256 digest. Review its model
+   card and license before use. Hugging Face revisions should be full immutable
    commit hashes for reproducible imports, even though Kama resolves a tag or branch
    once before publication.
 3. Apply one cache and one matching artifact:

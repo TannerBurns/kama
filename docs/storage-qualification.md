@@ -17,18 +17,31 @@ direct RWO is supported with the PV's node constraints, and direct ROX is read-o
 multi-node storage.
 
 The probe implementation and repository tests establish this contract, not a storage
-qualification result. Fixture-backed Kind uses static local volumes and must not be
-entered below as production CSI evidence.
+qualification result. The self-contained M1 acceptance workflow may establish the
+functional floor with ephemeral test storage inside its runner. Such a result closes
+the M1 storage scenarios but must not be entered as evidence for a named production
+CSI driver/backend.
 
-## Qualification results
+## M1 functional CI results
 
-No production CSI implementation has completed the strict live M1 qualification in
-this repository yet. Therefore Kama currently publishes a functional contract, not a
-universal throughput SLA or a named production StorageClass support claim.
+Record a qualifying self-contained workflow run here after it passes every M1
+storage scenario. This table records functional semantics only and is not a
+production support matrix.
+
+| Date | Commit | Workflow run | Kubernetes | Test driver/service | RWX cross-node | RWO topology | ENOSPC and publication safety | Evidence |
+|---|---|---|---|---|---|---|---|---|
+| Pending | - | - | - | - | - | - | - | M1 functional workflow not yet verified |
+
+## Named production compatibility results
+
+No production CSI implementation has completed a named compatibility qualification
+in this repository yet. This does not block M1 functional acceptance. It means Kama
+currently publishes a functional contract, not a universal throughput SLA or a named
+production StorageClass support claim.
 
 Record every completed environment below; do not generalize results to another CSI,
 backend, mount option, or Kubernetes version.
 
 | Date | Kubernetes | CSI driver/version | Backend and mount options | Access mode | Probe | Import throughput | Cold/warm load | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| Pending | - | - | - | - | - | - | - | Strict live gate not yet run |
+| Pending | - | - | - | - | - | - | - | Named compatibility gate not yet run |

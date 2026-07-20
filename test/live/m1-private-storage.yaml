@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kama-m1-live-private-cache
+spec:
+  capacity:
+    storage: 2Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kama-m1-live-private-local
+  local:
+    path: /var/local/kama-m1-live-private-cache
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - KAMA_WORKER_NODE
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: m1-live-private-cache
+  namespace: kama-system
+spec:
+  retentionPolicy: Retain
+  storage:
+    claimTemplate:
+      spec:
+        storageClassName: kama-m1-live-private-local
+        accessModes:
+          - ReadWriteOnce
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: 2Gi

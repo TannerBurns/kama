@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: M1_READER_NAME
+  namespace: M1_NAMESPACE
+  labels:
+    app.kubernetes.io/name: kama-m1-functional
+    kama.tannerburns.github.io/m1-reader: "true"
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  nodeSelector:
+    kubernetes.io/hostname: M1_READER_NODE
+  tolerations:
+    - operator: Exists
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: reader
+      image: M1_HELPER_IMAGE
+      imagePullPolicy: Never
+      command:
+        - /m1-functional-helper
+      args:
+        - verify-tree
+        - --root=/artifact
+        - --expected-file=model.gguf
+        - --expected-sha256=0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94
+        - --ready-file=/tmp/ready
+        - --hold=300s
+      readinessProbe:
+        exec:
+          command:
+            - /m1-functional-helper
+            - ready
+            - --file=/tmp/ready
+        periodSeconds: 1
+        timeoutSeconds: 2
+        failureThreshold: 120
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
+        readOnlyRootFilesystem: true
+      resources:
+        requests:
+          cpu: 5m
+          memory: 8Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi
+      volumeMounts:
+        - name: artifact
+          mountPath: /artifact
+          subPath: M1_ARTIFACT_SUBPATH
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: artifact
+      persistentVolumeClaim:
+        claimName: M1_ARTIFACT_CLAIM
+        readOnly: true
+    - name: tmp
+      emptyDir: {}
