@@ -31,7 +31,7 @@ semantics only, not overall milestone qualification or a production support matr
 
 | Date | Commit | Workflow run | Kubernetes | Test driver/service | RWX cross-node | RWO topology | ENOSPC and publication safety | Evidence |
 |---|---|---|---|---|---|---|---|---|
-| 2026-07-20 | [`5a73901`](https://github.com/TannerBurns/kama/commit/5a7390176fd6eecf37a5f6803197a87abe92fa40) | [run 29763107454 / job 88422393596](https://github.com/TannerBurns/kama/actions/runs/29763107454/job/88422393596) | 1.36.1 | NFS CSI 4.13.4 with in-runner NFS service | Pass: two-node concurrent read-only checksum and `mmap` | Pass: matching node scheduled; wrong node rejected by PV affinity | Pass: real tmpfs ENOSPC; ready bytes/status unchanged | `m1-functional-29763107454-1` |
+| 2026-07-20 | [`0b2118b`](https://github.com/TannerBurns/kama/commit/0b2118bf294d9b70492fc4c9c80649b0cbd0b8b5) | [run 29765667011 / job 88431153310](https://github.com/TannerBurns/kama/actions/runs/29765667011/job/88431153310) | 1.36.1 | NFS CSI 4.13.4 with in-runner NFS service | Pass: two-node concurrent read-only checksum and `mmap` | Pass: matching node scheduled; wrong node rejected by PV affinity | Pass: real tmpfs ENOSPC; ready bytes/status unchanged | `e2e-storage-29765667011-1` |
 
 ## Named production compatibility results
 

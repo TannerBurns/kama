@@ -52,8 +52,10 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 
 **Status: In Progress.** The repository-scoped implementation, CI/Kind gates, pinned
 public Hugging Face E2E lane, and E2E storage/failure lanes are verified at
-[`5a7390176fd6eecf37a5f6803197a87abe92fa40`](https://github.com/TannerBurns/kama/commit/5a7390176fd6eecf37a5f6803197a87abe92fa40)
-and [workflow run 29763107454](https://github.com/TannerBurns/kama/actions/runs/29763107454).
+[`0b2118bf294d9b70492fc4c9c80649b0cbd0b8b5`](https://github.com/TannerBurns/kama/commit/0b2118bf294d9b70492fc4c9c80649b0cbd0b8b5),
+[CI run 29765666754](https://github.com/TannerBurns/kama/actions/runs/29765666754),
+[Kind run 29765666556](https://github.com/TannerBurns/kama/actions/runs/29765666556),
+and [E2E run 29765667011](https://github.com/TannerBurns/kama/actions/runs/29765667011).
 M1 remains open only because the required project-controlled private Hugging Face
 repository and read-only token are not configured, so the successful Hugging Face job
 correctly recorded `qualifying=false`. Qualification of a named production CSI
