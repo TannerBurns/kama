@@ -382,7 +382,8 @@ configure_private_lane() {
   fi
 
   local anonymous_status
-  anonymous_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  anonymous_status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+    --output /dev/null --write-out '%{http_code}' \
     "https://huggingface.co/api/models/${M1_PRIVATE_HF_REPOSITORY}/revision/${M1_PRIVATE_HF_REVISION}" || true)"
   if [[ "${anonymous_status}" == "200" ]]; then
     echo "configured private Hugging Face repository is anonymously readable" >&2

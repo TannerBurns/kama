@@ -23,7 +23,9 @@ SYFT_VERSION := v1.44.0
 COSIGN_VERSION := v3.0.6
 KEDA_VERSION := 2.20.0
 NFS_CSI_VERSION := 4.13.4
-NFS_SERVER_IMAGE := docker.io/itsthenetwork/nfs-server-alpine:12@sha256:79f203edfcf81e8ef27e81ca47049d8b3e6007969337b808a49288317b6a26c3
+# Test-only mirror used by KubeVirt CDI. Pin the schema-v2 manifest digest;
+# sha256:79f203... is this image's config digest and is not pullable directly.
+NFS_SERVER_IMAGE := quay.io/awels/nfs-server-alpine:12@sha256:7fa99ae65c23c5af87dd4300e543a86b119ed15ba61422444207efc7abd0ba20
 
 KIND_NODE_IMAGE_1.34 := kindest/node:v1.34.8@sha256:02722c2dedddcfc00febf5d27fbeb9b7b2c14294c82109ff4a85d89ac9ba3256
 KIND_NODE_IMAGE_1.35 := kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95

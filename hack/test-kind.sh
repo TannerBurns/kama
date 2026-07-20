@@ -9,7 +9,7 @@ kubectl_bin="${KUBECTL:-kubectl}"
 helm_bin="${HELM:-${repo_root}/bin/helm}"
 keda_version="${KEDA_VERSION:-2.20.0}"
 nfs_csi_version="${NFS_CSI_VERSION:-4.13.4}"
-nfs_server_image="${NFS_SERVER_IMAGE:-docker.io/itsthenetwork/nfs-server-alpine:12@sha256:79f203edfcf81e8ef27e81ca47049d8b3e6007969337b808a49288317b6a26c3}"
+nfs_server_image="${NFS_SERVER_IMAGE:-quay.io/awels/nfs-server-alpine:12@sha256:7fa99ae65c23c5af87dd4300e543a86b119ed15ba61422444207efc7abd0ba20}"
 cluster_name="${KIND_CLUSTER:-kama}"
 node_image="${KIND_NODE_IMAGE:?KIND_NODE_IMAGE must be a digest-pinned Kind node image}"
 namespace="kama-system"
@@ -48,6 +48,17 @@ cleanup() {
       -l kubernetes.io/service-name=kama-webhook -o yaml || true
     "${kubectl_bin}" -n "${namespace}" logs deployment/kama \
       --all-containers=true --prefix=true --tail=200 || true
+    if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
+      local evidence_dir="${repo_root}/dist/m1-functional"
+      mkdir -p "${evidence_dir}"
+      "${kubectl_bin}" get pods -A -o wide >"${evidence_dir}/failure-pods.txt" 2>&1 || true
+      "${kubectl_bin}" get events -A --sort-by=.lastTimestamp \
+        >"${evidence_dir}/failure-events.txt" 2>&1 || true
+      "${kubectl_bin}" -n "${namespace}" describe deployment/m1-functional-nfs \
+        >"${evidence_dir}/failure-nfs-server.txt" 2>&1 || true
+      "${kubectl_bin}" -n kube-system get deployment/csi-nfs-controller \
+        daemonset/csi-nfs-node -o yaml >"${evidence_dir}/failure-nfs-csi.yaml" 2>&1 || true
+    fi
   fi
   if [[ ${cluster_created} -eq 1 && "${KEEP_KIND_CLUSTER:-0}" != "1" ]]; then
     "${kind_bin}" delete cluster --name "${cluster_name}" || true

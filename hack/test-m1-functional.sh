@@ -301,7 +301,7 @@ wait_reader() {
   local reader_name=$1
   local node=$2
   "${kubectl_bin}" -n "${namespace}" wait --for=condition=Ready=True \
-    "pod/${reader_name}" --timeout=2m
+    "pod/${reader_name}" --timeout=3m
   local actual_node
   local actual_hostname
   actual_node="$("${kubectl_bin}" -n "${namespace}" get pod "${reader_name}" \
