@@ -318,8 +318,8 @@ rwx_claim="$(artifact_location m1-rwx-baseline claimName)"
 rwx_subpath="$(artifact_location m1-rwx-baseline subPath)"
 require_subpath "${rwx_subpath}"
 if ! jq -e --arg digest "${valid_sha256}" '
-  .status.mountScope == "MultiNode" and
-  (.status.accessModes | index("ReadWriteMany") != null) and
+  .status.location.mountScope == "MultiNode" and
+  (.status.location.accessModes | index("ReadWriteMany") != null) and
   .status.files == [{"path":"model.gguf","sha256":$digest,"size":180}]
 ' <<<"$("${kubectl_bin}" -n "${namespace}" get modelartifact m1-rwx-baseline -o json)" >/dev/null; then
   fail "RWX baseline status does not report a MultiNode verified artifact"

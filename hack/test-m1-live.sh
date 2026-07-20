@@ -157,6 +157,41 @@ wait_for_condition() {
     --for="condition=${condition}=True" "${resource}/${name}" --timeout="${timeout}"
 }
 
+wait_for_admission() {
+  local rollout_context=$1
+  local attempt
+  local admission_log="${tmp_dir}/admission-readiness.log"
+
+  for attempt in $(seq 1 8); do
+    if "${kubectl_bin}" -n "${namespace}" create --dry-run=server -f - \
+      >/dev/null 2>"${admission_log}" <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: admission-routing-readiness
+spec:
+  storage:
+    existingClaim:
+      name: admission-only
+EOF
+    then
+      return 0
+    fi
+    if ! grep -Eq \
+      'failed calling webhook|no endpoints available|connection refused|context deadline exceeded|TLS handshake timeout' \
+      "${admission_log}"; then
+      break
+    fi
+    if [[ ${attempt} -lt 8 ]]; then
+      sleep 2
+    fi
+  done
+
+  echo "admission did not become reachable after ${rollout_context}:" >&2
+  sed -n '1,20p' "${admission_log}" >&2
+  return 1
+}
+
 job_result() {
   local job_name=$1
   local job_uid pod_name
@@ -404,8 +439,12 @@ docker build \
 cluster_created=1
 "${kind_bin}" load docker-image --name "${cluster_name}" "${manager_image}" "${importer_image}"
 
-if [[ "$("${kubectl_bin}" get nodes -o json | jq '[.items[] | select(.status.conditions[] | .type == "Ready" and .status == "True")] | length')" != "2" ]]; then
-  echo "M1 live lane requires exactly two Ready Kind nodes" >&2
+"${kubectl_bin}" wait --for=condition=Ready node --all --timeout=2m
+ready_node_count="$("${kubectl_bin}" get nodes -o json | jq '
+  [.items[] | select(any(.status.conditions[]; .type == "Ready" and .status == "True"))] | length
+')"
+if [[ "${ready_node_count}" != "2" ]]; then
+  echo "M1 live lane requires exactly two Ready Kind nodes; found ${ready_node_count}" >&2
   exit 1
 fi
 
@@ -427,6 +466,11 @@ chart_package="${repo_root}/dist/kama-${version}.tgz"
   --wait \
   --timeout 3m
 "${kubectl_bin}" -n "${namespace}" rollout status deployment/kama --timeout=3m
+"${kubectl_bin}" wait --for=condition=Established \
+  crd/modelcaches.kama.tannerburns.github.io \
+  crd/modelartifacts.kama.tannerburns.github.io \
+  --timeout=60s
+wait_for_admission "the initial manager rollout"
 
 sed "s|KAMA_WORKER_NODE|${worker_node}|g" \
   "${repo_root}/test/live/m1-storage.yaml" >"${tmp_dir}/m1-storage.yaml"
@@ -478,6 +522,7 @@ manager_restart_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   --wait \
   --timeout 3m
 "${kubectl_bin}" -n "${namespace}" rollout status deployment/kama --timeout=3m
+wait_for_admission "the endpoint-change manager rollout"
 manager_restart_completed="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 manager_pod_uid_after="$("${kubectl_bin}" -n "${namespace}" get pods \
   --selector app.kubernetes.io/name=kama,app.kubernetes.io/instance=kama \
