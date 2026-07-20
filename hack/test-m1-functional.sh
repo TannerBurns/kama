@@ -380,7 +380,12 @@ for _ in $(seq 1 60); do
   event_messages="$("${kubectl_bin}" -n "${namespace}" get events \
     --field-selector involvedObject.kind=Pod,involvedObject.name=m1-rwo-wrong-node \
     -o jsonpath='{range .items[*]}{.message}{"\n"}{end}' 2>/dev/null || true)"
-  if [[ "${scheduled}" == "False" ]] && grep -Eiq 'volume node affinity conflict' <<<"${event_messages}"; then
+  # Kubernetes 1.35 and earlier commonly reported a "volume node affinity
+  # conflict" here. Kubernetes 1.36 reports that the node "didn't match
+  # PersistentVolume's node affinity" instead. Both prove the same RWO
+  # placement guarantee, so keep the assertion compatible with either form.
+  if [[ "${scheduled}" == "False" ]] && \
+    grep -Eiq 'volume node affinity conflict|PersistentVolume.*node affinity' <<<"${event_messages}"; then
     rwo_conflict_observed=1
     printf '%s\n' "${event_messages}" >"${evidence_dir}/rwo-wrong-node-events.txt"
     break
