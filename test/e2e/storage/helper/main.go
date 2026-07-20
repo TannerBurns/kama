@@ -32,7 +32,7 @@ const fillBlockSize = 64 << 10
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: m1-functional-helper <verify-tree|ready|fill> [flags]")
+		fatalf("usage: e2e-storage-helper <verify-tree|ready|fill> [flags]")
 	}
 
 	var err error
@@ -86,13 +86,13 @@ func verifyTree(args []string) (returnedErr error) {
 		return errors.New("publication tree contains no regular files")
 	}
 
-	if _, err := fmt.Fprintf(os.Stdout, "M1_FILE_SHA256=%s\n", fileDigest); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, "E2E_FILE_SHA256=%s\n", fileDigest); err != nil {
 		return fmt.Errorf("write file digest: %w", err)
 	}
-	if _, err := fmt.Fprintf(os.Stdout, "M1_TREE_DIGEST=%s\n", treeDigest); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, "E2E_TREE_DIGEST=%s\n", treeDigest); err != nil {
 		return fmt.Errorf("write tree digest: %w", err)
 	}
-	if _, err := fmt.Fprintf(os.Stdout, "M1_MMAP_HELD=true files=%d\n", files); err != nil {
+	if _, err := fmt.Fprintf(os.Stdout, "E2E_MMAP_HELD=true files=%d\n", files); err != nil {
 		return fmt.Errorf("write mmap result: %w", err)
 	}
 	if *readyFile != "" {
@@ -139,7 +139,7 @@ func fill(args []string) error {
 	if err := os.MkdirAll(*root, 0o750); err != nil {
 		return fmt.Errorf("prepare fill root: %w", err)
 	}
-	fillPath := filepath.Join(*root, ".m1-functional-fill")
+	fillPath := filepath.Join(*root, ".e2e-storage-fill")
 	file, err := os.OpenFile(fillPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("create fill file: %w", err)
@@ -181,7 +181,7 @@ func fill(args []string) error {
 		return fmt.Errorf("free space after ENOSPC recovery = %d, want 1..%d", free, *maxFreeBytes)
 	}
 	if _, err := fmt.Fprintf(
-		os.Stdout, "M1_ENOSPC_OBSERVED=true bytes_written=%d bytes_free=%d\n", written, free,
+		os.Stdout, "E2E_ENOSPC_OBSERVED=true bytes_written=%d bytes_free=%d\n", written, free,
 	); err != nil {
 		return fmt.Errorf("write ENOSPC result: %w", err)
 	}
@@ -287,6 +287,6 @@ func filesystemSpace(root string) (capacity, free uint64, err error) {
 }
 
 func fatalf(format string, args ...any) {
-	_, _ = fmt.Fprintf(os.Stderr, "m1-functional-helper: "+format+"\n", args...)
+	_, _ = fmt.Fprintf(os.Stderr, "e2e-storage-helper: "+format+"\n", args...)
 	os.Exit(1)
 }

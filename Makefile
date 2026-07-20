@@ -59,7 +59,7 @@ bootstrap: kubebuilder controller-gen envtest kustomize golangci-lint govulnchec
 ##@ Generation and quality
 
 .PHONY: manifests
-manifests: controller-gen ## Generate M1 RBAC, webhook, and CRD manifests.
+manifests: controller-gen ## Generate artifact-plane RBAC, webhook, and CRD manifests.
 	@mkdir -p config/crd/bases config/rbac config/webhook charts/kama/crds
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook \
 		'paths=./api/...;./internal/controller/...' \
@@ -140,19 +140,19 @@ test-kind: kind helm ## Run the Helm, admission, KEDA, fixture, and uninstall sm
 	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" KEDA_VERSION="$(KEDA_VERSION)" \
 	NFS_CSI_VERSION="$(NFS_CSI_VERSION)" NFS_SERVER_IMAGE="$(NFS_SERVER_IMAGE)" VERSION="$(VERSION)" \
-	M1_FUNCTIONAL_ACCEPTANCE="$(M1_FUNCTIONAL_ACCEPTANCE)" IMG="$(IMG)" \
+	E2E_STORAGE_SUITE="$(E2E_STORAGE_SUITE)" IMG="$(IMG)" \
 	IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" bash hack/test-kind.sh
 
-.PHONY: test-m1-functional
-test-m1-functional: ## Run the one-minor, self-contained M1 storage/failure acceptance suite on Kind.
-	$(MAKE) test-kind M1_FUNCTIONAL_ACCEPTANCE=1
+.PHONY: test-e2e-storage
+test-e2e-storage: ## Run the artifact-plane storage resilience suite on a two-node Kind cluster.
+	$(MAKE) test-kind E2E_STORAGE_SUITE=1
 
-.PHONY: test-m1-live
-test-m1-live: kind helm ## Run live Hugging Face import/recovery; private qualification uses protected environment configuration.
+.PHONY: test-e2e-huggingface
+test-e2e-huggingface: kind helm ## Run real Hugging Face import/recovery; private inputs use protected environment configuration.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
 	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" VERSION="$(VERSION)" IMG="$(IMG)" \
-	IMPORTER_IMG="$(IMPORTER_IMG)" bash hack/test-m1-live.sh
+	IMPORTER_IMG="$(IMPORTER_IMG)" bash hack/test-e2e-huggingface.sh
 
 ##@ Build and packaging
 

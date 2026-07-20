@@ -103,7 +103,7 @@ type integrationSuite struct {
 	gcDone        chan struct{}
 }
 
-func TestM1PersistentArtifactPlane(t *testing.T) {
+func TestPersistentArtifactPlane(t *testing.T) {
 	suite := newIntegrationSuite(t)
 
 	t.Run("admission defaults validates and freezes ready content", suite.testAdmission)
@@ -868,7 +868,7 @@ func (s *integrationSuite) testRetryFailureAndDeletion(t *testing.T) {
 
 func (s *integrationSuite) createNamespace(t *testing.T, suffix string) string {
 	t.Helper()
-	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "m1-" + suffix + "-"}}
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{GenerateName: "artifact-" + suffix + "-"}}
 	if err := s.apiClient.Create(context.Background(), namespace); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
@@ -885,7 +885,7 @@ func (s *integrationSuite) createBoundClaim(
 	storageClass := "manual"
 	volumeMode := corev1.PersistentVolumeFilesystem
 	pv := &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "m1-pv-"},
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "artifact-pv-"},
 		Spec: corev1.PersistentVolumeSpec{
 			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")},
 			AccessModes:                   append([]corev1.PersistentVolumeAccessMode(nil), modes...),
@@ -929,7 +929,7 @@ func (s *integrationSuite) bindClaim(
 	t.Helper()
 	volumeMode := corev1.PersistentVolumeFilesystem
 	pv := &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{GenerateName: "m1-managed-pv-"},
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "artifact-managed-pv-"},
 		Spec: corev1.PersistentVolumeSpec{
 			Capacity:                      corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")},
 			AccessModes:                   append([]corev1.PersistentVolumeAccessMode(nil), modes...),

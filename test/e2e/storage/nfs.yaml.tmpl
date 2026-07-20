@@ -1,27 +1,27 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: m1-functional-nfs
+  name: e2e-storage-nfs
   namespace: kama-system
   labels:
-    app.kubernetes.io/name: kama-m1-functional-nfs
+    app.kubernetes.io/name: kama-e2e-storage-nfs
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: kama-m1-functional-nfs
+      app.kubernetes.io/name: kama-e2e-storage-nfs
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: kama-m1-functional-nfs
+        app.kubernetes.io/name: kama-e2e-storage-nfs
     spec:
       automountServiceAccountToken: false
       enableServiceLinks: false
       nodeSelector:
-        kubernetes.io/hostname: M1_WORKER_NODE
+        kubernetes.io/hostname: E2E_WORKER_NODE
       containers:
         - name: nfs
-          image: M1_NFS_SERVER_IMAGE
+          image: E2E_NFS_SERVER_IMAGE
           imagePullPolicy: IfNotPresent
           env:
             - name: SHARED_DIRECTORY
@@ -62,13 +62,13 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: m1-functional-nfs
+  name: e2e-storage-nfs
   namespace: kama-system
   labels:
-    app.kubernetes.io/name: kama-m1-functional-nfs
+    app.kubernetes.io/name: kama-e2e-storage-nfs
 spec:
   selector:
-    app.kubernetes.io/name: kama-m1-functional-nfs
+    app.kubernetes.io/name: kama-e2e-storage-nfs
   ports:
     - name: nfs-tcp
       port: 2049
@@ -86,12 +86,12 @@ spec:
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: m1-functional-nfs
+  name: e2e-storage-nfs
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 provisioner: nfs.csi.k8s.io
 parameters:
-  server: m1-functional-nfs.kama-system.svc.cluster.local
+  server: e2e-storage-nfs.kama-system.svc.cluster.local
   share: /
   mountPermissions: "0777"
   onDelete: delete

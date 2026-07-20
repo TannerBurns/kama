@@ -8,8 +8,9 @@ route requests across ready replicas, and scale model capacity to and from zero.
 The M0 engineering foundation is complete. The M1 persistent-artifact-plane
 repository implementation is present: the repository contains the v1alpha1 artifact
 API, importer and persistent-cache implementation, packaging, examples, and recovery
-guidance. The M1 milestone remains In Progress because immutable fixture-backed Kind
-results and strict live storage/private-source acceptance evidence remain outstanding.
+guidance. CI, the Kubernetes 1.34-1.36 matrix, public Hugging Face E2E, and storage
+resilience E2E are verified. M1 remains In Progress only until the protected private
+Hugging Face lane produces qualifying evidence.
 
 ## Project plan
 
@@ -38,11 +39,11 @@ and [verified commit](https://github.com/TannerBurns/kama/commit/ef63e791a743509
 Accepted decisions, assumed defaults, and remaining validation items are tracked in
 [decisions and open questions](docs/project-plan/10-decisions-and-open-questions.md).
 
-Start with the [M1 examples](examples/README.md), consult the
+Start with the [artifact-plane examples](examples/README.md), consult the
 [artifact recovery runbook](docs/runbooks/artifact-import-and-recovery.md), and do
-not treat M1 as complete until the fixture-backed Kind matrix and every strict live
-definition-of-done gate in the
-[delivery roadmap](docs/project-plan/08-delivery-roadmap.md) have linked evidence.
-The Helm chart is the complete M1 installation path. `config/default` remains a
-developer Kustomize bundle with admission disabled until a downstream overlay
-provides webhook TLS.
+not treat M1 as complete until every strict private-source definition-of-done gate in
+the [delivery roadmap](docs/project-plan/08-delivery-roadmap.md) has linked evidence.
+The reusable real-cluster suites and extension contract live under
+[test/e2e](test/e2e/README.md). The Helm chart is the complete artifact-plane
+installation path. `config/default` remains a developer Kustomize bundle with
+admission disabled until a downstream overlay provides webhook TLS.

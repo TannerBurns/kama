@@ -1,23 +1,23 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: m1-functional-fill
-  namespace: M1_NAMESPACE
+  name: e2e-storage-fill
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 120
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: kama-m1-functional
+        app.kubernetes.io/name: kama-e2e-storage
     spec:
       restartPolicy: Never
       automountServiceAccountToken: false
       enableServiceLinks: false
       nodeSelector:
-        kubernetes.io/hostname: M1_WORKER_NODE
+        kubernetes.io/hostname: E2E_WORKER_NODE
       tolerations:
         - operator: Exists
       securityContext:
@@ -29,10 +29,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: fill
-          image: M1_HELPER_IMAGE
+          image: E2E_HELPER_IMAGE
           imagePullPolicy: Never
           command:
-            - /m1-functional-helper
+            - /e2e-storage-helper
           args:
             - fill
             - --root=/cache
@@ -57,4 +57,4 @@ spec:
       volumes:
         - name: cache
           persistentVolumeClaim:
-            claimName: m1-functional-full
+            claimName: e2e-storage-full

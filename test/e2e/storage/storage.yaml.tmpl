@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: M1_NAMESPACE
+  name: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 ---
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: m1-functional-source-local
+  name: e2e-storage-source-local
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 provisioner: kubernetes.io/no-provisioner
 reclaimPolicy: Retain
 volumeBindingMode: Immediate
@@ -18,9 +18,9 @@ volumeBindingMode: Immediate
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
-  name: m1-functional-full-local
+  name: e2e-storage-full-local
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 provisioner: kubernetes.io/no-provisioner
 reclaimPolicy: Retain
 volumeBindingMode: Immediate
@@ -28,9 +28,9 @@ volumeBindingMode: Immediate
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: m1-functional-source
+  name: e2e-storage-source
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   capacity:
     storage: 16Mi
@@ -38,9 +38,9 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: m1-functional-source-local
+  storageClassName: e2e-storage-source-local
   local:
-    path: /var/local/kama-m1-functional-source
+    path: /var/local/kama-e2e-storage-source
   nodeAffinity:
     required:
       nodeSelectorTerms:
@@ -48,14 +48,14 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - M1_WORKER_NODE
+                - E2E_WORKER_NODE
 ---
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: m1-functional-full
+  name: e2e-storage-full
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   capacity:
     storage: 8Mi
@@ -63,9 +63,9 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: m1-functional-full-local
+  storageClassName: e2e-storage-full-local
   local:
-    path: /var/local/kama-m1-functional-full
+    path: /var/local/kama-e2e-storage-full
   nodeAffinity:
     required:
       nodeSelectorTerms:
@@ -73,20 +73,20 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - M1_WORKER_NODE
+                - E2E_WORKER_NODE
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: m1-functional-source
-  namespace: M1_NAMESPACE
+  name: e2e-storage-source
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   accessModes:
     - ReadWriteOnce
   volumeMode: Filesystem
-  storageClassName: m1-functional-source-local
+  storageClassName: e2e-storage-source-local
   resources:
     requests:
       storage: 16Mi
@@ -94,15 +94,15 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: m1-functional-full
-  namespace: M1_NAMESPACE
+  name: e2e-storage-full
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   accessModes:
     - ReadWriteOnce
   volumeMode: Filesystem
-  storageClassName: m1-functional-full-local
+  storageClassName: e2e-storage-full-local
   resources:
     requests:
       storage: 8Mi
@@ -110,15 +110,15 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: m1-functional-rwx
-  namespace: M1_NAMESPACE
+  name: e2e-storage-rwx
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   accessModes:
     - ReadWriteMany
   volumeMode: Filesystem
-  storageClassName: M1_RWX_STORAGE_CLASS
+  storageClassName: E2E_RWX_STORAGE_CLASS
   resources:
     requests:
       storage: 32Mi
@@ -126,25 +126,25 @@ spec:
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelCache
 metadata:
-  name: m1-functional-rwx
-  namespace: M1_NAMESPACE
+  name: e2e-storage-rwx
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   retentionPolicy: Retain
   storage:
     existingClaim:
-      name: m1-functional-rwx
+      name: e2e-storage-rwx
 ---
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelCache
 metadata:
-  name: m1-functional-full
-  namespace: M1_NAMESPACE
+  name: e2e-storage-full
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   retentionPolicy: Retain
   storage:
     existingClaim:
-      name: m1-functional-full
+      name: e2e-storage-full

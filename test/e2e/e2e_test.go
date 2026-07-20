@@ -21,9 +21,9 @@ package e2e
 import "testing"
 
 // TestKubebuilderScaffoldMarkers preserves Kubebuilder's extension points while
-// M0's executable cluster acceptance suite lives in hack/test-kind.sh.
+// executable cluster suites live in hack/test-kind.sh and hack/test-e2e-*.sh.
 func TestKubebuilderScaffoldMarkers(t *testing.T) {
-	t.Skip("M0 cluster acceptance runs through make test-kind")
+	t.Skip("cluster end-to-end suites run through make test-kind and make test-e2e-*")
 
 	// +kubebuilder:scaffold:e2e-metrics-webhooks-readiness
 

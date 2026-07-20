@@ -13,7 +13,7 @@ spec:
   source:
     huggingFace:
       repository: HuggingFaceTB/SmolLM2-360M-Instruct-GGUF
-      # Apache-2.0 model used by Kama's live M1 and future CPU-serving smoke tests.
+      # Apache-2.0 model used by Kama's Hugging Face E2E and future CPU-serving smoke tests.
       revision: 593b5a2e04c8f3e4ee880263f93e0bd2901ad47f
       files:
         - smollm2-360m-instruct-q8_0.gguf

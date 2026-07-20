@@ -7,14 +7,14 @@ version="$(tr -d '\r\n' < "${repo_root}/VERSION")"
 kind_bin="${KIND:-${repo_root}/bin/kind}"
 kubectl_bin="${KUBECTL:-kubectl}"
 helm_bin="${HELM:-${repo_root}/bin/helm}"
-cluster_name="${KIND_CLUSTER:-kama-m1-live}"
+cluster_name="${KIND_CLUSTER:-kama-e2e-hf}"
 node_image="${KIND_NODE_IMAGE:?KIND_NODE_IMAGE must be a digest-pinned Kind node image}"
 namespace="kama-system"
 manager_image="${IMG:-local/kama-manager:${version}}"
 importer_image="${IMPORTER_IMG:-local/kama-importer:${version}}"
 created="$(git -C "${repo_root}" show -s --format=%cI HEAD 2>/dev/null || printf '1970-01-01T00:00:00Z')"
 revision="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
-evidence_dir="${EVIDENCE_DIR:-${repo_root}/dist/m1-live}"
+evidence_dir="${E2E_EVIDENCE_DIR:-${repo_root}/dist/e2e/huggingface}"
 tmp_dir="$(mktemp -d)"
 cluster_created=0
 evidence_captured=0
@@ -28,7 +28,7 @@ manager_restart_completed=""
 manager_pod_uid_before=""
 manager_pod_uid_after=""
 
-public_name="m1-live-public"
+public_name="e2e-hf-public"
 public_repository="HuggingFaceTB/SmolLM2-360M-Instruct-GGUF"
 public_revision="593b5a2e04c8f3e4ee880263f93e0bd2901ad47f"
 public_file="smollm2-360m-instruct-q8_0.gguf"
@@ -37,10 +37,10 @@ public_sha256="48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201"
 
 mkdir -p "${evidence_dir}"
 
-case "${M1_REQUIRE_PRIVATE:-false}" in
+case "${E2E_REQUIRE_PRIVATE_HF:-false}" in
   1 | true) require_private=1 ;;
   0 | false | "") ;;
-  *) echo "M1_REQUIRE_PRIVATE must be true or false" >&2; exit 2 ;;
+  *) echo "E2E_REQUIRE_PRIVATE_HF must be true or false" >&2; exit 2 ;;
 esac
 
 if [[ ! -x "${kind_bin}" ]]; then
@@ -95,6 +95,7 @@ capture_evidence() {
     --argjson publicPassed "${public_result}" \
     --argjson qualifying "${qualifying}" '{
       schemaVersion: 1,
+      suite: "artifact-plane/huggingface",
       outcome: $outcome,
       public: (if $publicPassed then "passed" else "failed" end),
       private: $private,
@@ -133,9 +134,9 @@ cleanup() {
   local exit_code=$?
   if [[ ${exit_code} -eq 0 ]]; then
     if [[ ${public_passed} -eq 1 && ${private_passed} -eq 1 ]]; then
-      capture_evidence "PASS: live public/private Hugging Face qualification complete"
+      capture_evidence "PASS: artifact-plane public/private Hugging Face qualification complete"
     else
-      capture_evidence "PASS (public only): M1 NOT QUALIFIED because the private lane was skipped"
+      capture_evidence "PASS (public only): artifact-plane qualification incomplete because the private lane was skipped"
     fi
   else
     capture_evidence "FAIL (exit ${exit_code})"
@@ -348,7 +349,7 @@ configure_private_lane() {
   if [[ -z "${HF_TOKEN:-}" ]]; then
     if [[ ${require_private} -eq 1 ]]; then
       private_status="FAILED: protected HF_TOKEN is required for this qualification run"
-      echo "private Hugging Face qualification requires the m1-live environment secret HF_TOKEN" >&2
+      echo "private Hugging Face qualification requires the e2e-huggingface environment secret HF_TOKEN" >&2
       return 1
     fi
     append_summary "Private Hugging Face lane: SKIPPED (protected HF_TOKEN is not configured)."
@@ -358,11 +359,11 @@ configure_private_lane() {
   private_status="FAILED: HF_TOKEN is present but the private lane did not complete"
 
   local required=(
-    M1_PRIVATE_HF_REPOSITORY
-    M1_PRIVATE_HF_REVISION
-    M1_PRIVATE_HF_FILE
-    M1_PRIVATE_HF_SHA256
-    M1_PRIVATE_HF_SIZE
+    E2E_PRIVATE_HF_REPOSITORY
+    E2E_PRIVATE_HF_REVISION
+    E2E_PRIVATE_HF_FILE
+    E2E_PRIVATE_HF_SHA256
+    E2E_PRIVATE_HF_SIZE
   )
   local variable
   for variable in "${required[@]}"; do
@@ -371,12 +372,12 @@ configure_private_lane() {
       return 1
     fi
   done
-  if [[ ! "${M1_PRIVATE_HF_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
-    [[ ! "${M1_PRIVATE_HF_REVISION}" =~ ^[a-fA-F0-9]{40}$ ]] ||
-    [[ ! "${M1_PRIVATE_HF_FILE}" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] ||
-    [[ "${M1_PRIVATE_HF_FILE}" == *..* ]] ||
-    [[ ! "${M1_PRIVATE_HF_SHA256}" =~ ^[a-fA-F0-9]{64}$ ]] ||
-    [[ ! "${M1_PRIVATE_HF_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
+  if [[ ! "${E2E_PRIVATE_HF_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] ||
+    [[ ! "${E2E_PRIVATE_HF_REVISION}" =~ ^[a-fA-F0-9]{40}$ ]] ||
+    [[ ! "${E2E_PRIVATE_HF_FILE}" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ ]] ||
+    [[ "${E2E_PRIVATE_HF_FILE}" == *..* ]] ||
+    [[ ! "${E2E_PRIVATE_HF_SHA256}" =~ ^[a-fA-F0-9]{64}$ ]] ||
+    [[ ! "${E2E_PRIVATE_HF_SIZE}" =~ ^[1-9][0-9]*$ ]]; then
     echo "private Hugging Face variables do not contain safe, immutable artifact metadata" >&2
     return 1
   fi
@@ -384,7 +385,7 @@ configure_private_lane() {
   local anonymous_status
   anonymous_status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
     --output /dev/null --write-out '%{http_code}' \
-    "https://huggingface.co/api/models/${M1_PRIVATE_HF_REPOSITORY}/revision/${M1_PRIVATE_HF_REVISION}" || true)"
+    "https://huggingface.co/api/models/${E2E_PRIVATE_HF_REPOSITORY}/revision/${E2E_PRIVATE_HF_REVISION}" || true)"
   if [[ "${anonymous_status}" == "200" ]]; then
     echo "configured private Hugging Face repository is anonymously readable" >&2
     return 1
@@ -397,21 +398,21 @@ configure_private_lane() {
 
   umask 077
   printf '%s' "${HF_TOKEN}" >"${tmp_dir}/huggingface-token"
-  "${kubectl_bin}" -n "${namespace}" create secret generic m1-live-huggingface-token \
+  "${kubectl_bin}" -n "${namespace}" create secret generic e2e-hf-huggingface-token \
     --from-file="token=${tmp_dir}/huggingface-token"
   sed \
-    -e "s|M1_PRIVATE_HF_REPOSITORY|${M1_PRIVATE_HF_REPOSITORY}|g" \
-    -e "s|M1_PRIVATE_HF_REVISION|${M1_PRIVATE_HF_REVISION}|g" \
-    -e "s|M1_PRIVATE_HF_FILE|${M1_PRIVATE_HF_FILE}|g" \
-    -e "s|M1_PRIVATE_HF_SHA256|${M1_PRIVATE_HF_SHA256,,}|g" \
-    -e "s|M1_PRIVATE_HF_SIZE|${M1_PRIVATE_HF_SIZE}|g" \
-    "${repo_root}/test/live/m1-private-artifact.yaml" >"${tmp_dir}/m1-private-artifact.yaml"
-  docker exec "${worker_node}" mkdir -p /var/local/kama-m1-live-private-cache
-  docker exec "${worker_node}" chmod 0777 /var/local/kama-m1-live-private-cache
+    -e "s|E2E_PRIVATE_HF_REPOSITORY|${E2E_PRIVATE_HF_REPOSITORY}|g" \
+    -e "s|E2E_PRIVATE_HF_REVISION|${E2E_PRIVATE_HF_REVISION}|g" \
+    -e "s|E2E_PRIVATE_HF_FILE|${E2E_PRIVATE_HF_FILE}|g" \
+    -e "s|E2E_PRIVATE_HF_SHA256|${E2E_PRIVATE_HF_SHA256,,}|g" \
+    -e "s|E2E_PRIVATE_HF_SIZE|${E2E_PRIVATE_HF_SIZE}|g" \
+    "${repo_root}/test/e2e/huggingface/private-artifact.yaml" >"${tmp_dir}/private-artifact.yaml"
+  docker exec "${worker_node}" mkdir -p /var/local/kama-e2e-hf-private-cache
+  docker exec "${worker_node}" chmod 0777 /var/local/kama-e2e-hf-private-cache
   sed "s|KAMA_WORKER_NODE|${worker_node}|g" \
-    "${repo_root}/test/live/m1-private-storage.yaml" >"${tmp_dir}/m1-private-storage.yaml"
-  "${kubectl_bin}" apply -f "${tmp_dir}/m1-private-storage.yaml"
-  wait_for_condition modelcache m1-live-private-cache Ready 5m
+    "${repo_root}/test/e2e/huggingface/private-storage.yaml" >"${tmp_dir}/private-storage.yaml"
+  "${kubectl_bin}" apply -f "${tmp_dir}/private-storage.yaml"
+  wait_for_condition modelcache e2e-hf-private-cache Ready 5m
   private_status="RUNNING: authenticated import and cache-only recovery are required"
   append_summary "Private Hugging Face lane: ENABLED (anonymous access denied; protected token import scheduled)."
 }
@@ -445,14 +446,14 @@ ready_node_count="$("${kubectl_bin}" get nodes -o json | jq '
   [.items[] | select(any(.status.conditions[]; .type == "Ready" and .status == "True"))] | length
 ')"
 if [[ "${ready_node_count}" != "2" ]]; then
-  echo "M1 live lane requires exactly two Ready Kind nodes; found ${ready_node_count}" >&2
+  echo "Hugging Face E2E lane requires exactly two Ready Kind nodes; found ${ready_node_count}" >&2
   exit 1
 fi
 
 "${kubectl_bin}" create namespace "${namespace}"
 worker_node="${cluster_name}-worker"
-docker exec "${worker_node}" mkdir -p /var/local/kama-m1-live-cache
-docker exec "${worker_node}" chmod 0777 /var/local/kama-m1-live-cache
+docker exec "${worker_node}" mkdir -p /var/local/kama-e2e-hf-cache
+docker exec "${worker_node}" chmod 0777 /var/local/kama-e2e-hf-cache
 
 OUTPUT_DIR="${repo_root}/dist" HELM="${helm_bin}" bash "${repo_root}/hack/helm-package.sh"
 chart_package="${repo_root}/dist/kama-${version}.tgz"
@@ -474,15 +475,15 @@ chart_package="${repo_root}/dist/kama-${version}.tgz"
 wait_for_admission "the initial manager rollout"
 
 sed "s|KAMA_WORKER_NODE|${worker_node}|g" \
-  "${repo_root}/test/live/m1-storage.yaml" >"${tmp_dir}/m1-storage.yaml"
-"${kubectl_bin}" apply -f "${tmp_dir}/m1-storage.yaml"
-wait_for_condition modelcache m1-live-cache Ready 5m
+  "${repo_root}/test/e2e/huggingface/public-storage.yaml" >"${tmp_dir}/public-storage.yaml"
+"${kubectl_bin}" apply -f "${tmp_dir}/public-storage.yaml"
+wait_for_condition modelcache e2e-hf-cache Ready 5m
 
 configure_private_lane
 
-"${kubectl_bin}" apply -f "${repo_root}/test/live/m1-public-artifact.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/e2e/huggingface/public-artifact.yaml"
 if [[ ${private_enabled} -eq 1 ]]; then
-  "${kubectl_bin}" apply -f "${tmp_dir}/m1-private-artifact.yaml"
+  "${kubectl_bin}" apply -f "${tmp_dir}/private-artifact.yaml"
 fi
 
 wait_for_condition modelartifact "${public_name}" Ready 20m
@@ -491,11 +492,11 @@ validate_artifact_status "${public_name}" "${public_revision}" "${public_file}" 
 validate_initial_result "${public_name}" "${public_revision}" "${public_size}" "${public_sha256}"
 
 if [[ ${private_enabled} -eq 1 ]]; then
-  wait_for_condition modelartifact m1-live-private Ready 20m
-  validate_artifact_status m1-live-private "${M1_PRIVATE_HF_REVISION}" "${M1_PRIVATE_HF_FILE}" \
-    "${M1_PRIVATE_HF_SIZE}" "${M1_PRIVATE_HF_SHA256,,}"
-  validate_initial_result m1-live-private "${M1_PRIVATE_HF_REVISION}" \
-    "${M1_PRIVATE_HF_SIZE}" "${M1_PRIVATE_HF_SHA256,,}"
+  wait_for_condition modelartifact e2e-hf-private Ready 20m
+  validate_artifact_status e2e-hf-private "${E2E_PRIVATE_HF_REVISION}" "${E2E_PRIVATE_HF_FILE}" \
+    "${E2E_PRIVATE_HF_SIZE}" "${E2E_PRIVATE_HF_SHA256,,}"
+  validate_initial_result e2e-hf-private "${E2E_PRIVATE_HF_REVISION}" \
+    "${E2E_PRIVATE_HF_SIZE}" "${E2E_PRIVATE_HF_SHA256,,}"
 fi
 
 public_job_uid="$("${kubectl_bin}" -n "${namespace}" get modelartifact "${public_name}" \
@@ -505,9 +506,9 @@ public_digest="$("${kubectl_bin}" -n "${namespace}" get modelartifact "${public_
 private_job_uid=""
 private_digest=""
 if [[ ${private_enabled} -eq 1 ]]; then
-  private_job_uid="$("${kubectl_bin}" -n "${namespace}" get modelartifact m1-live-private \
+  private_job_uid="$("${kubectl_bin}" -n "${namespace}" get modelartifact e2e-hf-private \
     -o jsonpath='{.status.jobRef.uid}')"
-  private_digest="$("${kubectl_bin}" -n "${namespace}" get modelartifact m1-live-private \
+  private_digest="$("${kubectl_bin}" -n "${namespace}" get modelartifact e2e-hf-private \
     -o jsonpath='{.status.artifactDigest}')"
 fi
 
@@ -519,7 +520,7 @@ manager_restart_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 "${helm_bin}" upgrade kama "${chart_package}" \
   --namespace "${namespace}" \
   --reuse-values \
-  --set-string importer.hubEndpoint=http://m1-live-hub-disabled.invalid \
+  --set-string importer.hubEndpoint=http://e2e-hf-hub-disabled.invalid \
   --wait \
   --timeout 3m
 "${kubectl_bin}" -n "${namespace}" rollout status deployment/kama --timeout=3m
@@ -544,10 +545,10 @@ if [[ "$("${kubectl_bin}" -n "${namespace}" get modelartifact "${public_name}" \
   exit 1
 fi
 if [[ ${private_enabled} -eq 1 ]]; then
-  wait_for_condition modelartifact m1-live-private Ready 2m
-  if [[ "$("${kubectl_bin}" -n "${namespace}" get modelartifact m1-live-private \
+  wait_for_condition modelartifact e2e-hf-private Ready 2m
+  if [[ "$("${kubectl_bin}" -n "${namespace}" get modelartifact e2e-hf-private \
     -o jsonpath='{.status.jobRef.uid}')" != "${private_job_uid}" ]] ||
-    [[ "$("${kubectl_bin}" -n "${namespace}" get modelartifact m1-live-private \
+    [[ "$("${kubectl_bin}" -n "${namespace}" get modelartifact e2e-hf-private \
       -o jsonpath='{.status.artifactDigest}')" != "${private_digest}" ]]; then
     echo "manager restart changed retained private importer evidence or artifact identity" >&2
     exit 1
@@ -560,19 +561,19 @@ validate_artifact_status "${public_name}" "${public_revision}" "${public_file}" 
 public_passed=1
 
 if [[ ${private_enabled} -eq 1 ]]; then
-  recover_without_hub m1-live-private "${M1_PRIVATE_HF_REVISION}" "${M1_PRIVATE_HF_SHA256,,}"
-  validate_artifact_status m1-live-private "${M1_PRIVATE_HF_REVISION}" "${M1_PRIVATE_HF_FILE}" \
-    "${M1_PRIVATE_HF_SIZE}" "${M1_PRIVATE_HF_SHA256,,}"
+  recover_without_hub e2e-hf-private "${E2E_PRIVATE_HF_REVISION}" "${E2E_PRIVATE_HF_SHA256,,}"
+  validate_artifact_status e2e-hf-private "${E2E_PRIVATE_HF_REVISION}" "${E2E_PRIVATE_HF_FILE}" \
+    "${E2E_PRIVATE_HF_SIZE}" "${E2E_PRIVATE_HF_SHA256,,}"
   private_status="PASS: anonymous access denied, token import succeeded, and recovery transferred zero bytes"
   private_passed=1
 fi
 
-append_summary "M1 live public lane: PASS (pinned SmolLM2 GGUF import, manager restart, and zero-transfer Job recovery)."
-append_summary "Source contact was disabled before recovery with http://m1-live-hub-disabled.invalid."
+append_summary "Artifact-plane Hugging Face E2E public lane: PASS (pinned SmolLM2 GGUF import, manager restart, and zero-transfer Job recovery)."
+append_summary "Source contact was disabled before recovery with http://e2e-hf-hub-disabled.invalid."
 if [[ ${private_passed} -eq 1 ]]; then
-  append_summary "M1 live Hugging Face qualification: PASS (public and private lanes)."
+  append_summary "Artifact-plane Hugging Face qualification: PASS (public and private lanes)."
 else
-  append_summary "M1 live Hugging Face qualification: NOT COMPLETE (private lane skipped; qualifying=false)."
+  append_summary "Artifact-plane Hugging Face qualification: NOT COMPLETE (private lane skipped; qualifying=false)."
 fi
 jq -n \
   --arg startedAt "${manager_restart_started}" \
@@ -592,11 +593,11 @@ jq -n \
   --arg publicFile "${public_file}" \
   --arg publicSHA256 "${public_sha256}" \
   --argjson publicSize "${public_size}" \
-  --arg privateRepository "${M1_PRIVATE_HF_REPOSITORY:-}" \
-  --arg privateRevision "${M1_PRIVATE_HF_REVISION:-}" \
-  --arg privateFile "${M1_PRIVATE_HF_FILE:-}" \
-  --arg privateSHA256 "${M1_PRIVATE_HF_SHA256:-}" \
-  --arg privateSize "${M1_PRIVATE_HF_SIZE:-}" \
+  --arg privateRepository "${E2E_PRIVATE_HF_REPOSITORY:-}" \
+  --arg privateRevision "${E2E_PRIVATE_HF_REVISION:-}" \
+  --arg privateFile "${E2E_PRIVATE_HF_FILE:-}" \
+  --arg privateSHA256 "${E2E_PRIVATE_HF_SHA256:-}" \
+  --arg privateSize "${E2E_PRIVATE_HF_SIZE:-}" \
   --argjson privateEnabled "$(if [[ ${private_enabled} -eq 1 ]]; then echo true; else echo false; fi)" '{
     public: {
       repository: $publicRepository,

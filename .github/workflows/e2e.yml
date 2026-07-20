@@ -1,4 +1,4 @@
-name: M1 functional acceptance
+name: End-to-end
 
 on:
   push:
@@ -12,15 +12,14 @@ on:
       - "hack/**"
       - "internal/**"
       - "test/kind/**"
-      - "test/live/**"
-      - "test/m1-functional/**"
+      - "test/e2e/**"
       - .go-version
       - "Dockerfile*"
       - Makefile
       - VERSION
       - go.mod
       - go.sum
-      - .github/workflows/m1-live.yml
+      - .github/workflows/e2e.yml
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -29,12 +28,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: m1-live-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  group: e2e-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   validate-dispatch:
-    name: Manual qualification ref
+    name: Trusted manual ref
     if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 2
@@ -44,17 +43,17 @@ jobs:
           QUALIFICATION_REF: ${{ github.ref }}
         run: |
           if [[ "${QUALIFICATION_REF}" != "refs/heads/main" ]]; then
-            echo "M1 qualification dispatches must select the main branch" >&2
+            echo "End-to-end dispatches with protected inputs must select the main branch" >&2
             exit 1
           fi
 
-  functional-storage:
-    name: Kubernetes 1.36 / storage and failure injection
+  storage-resilience:
+    name: Artifact plane / Kubernetes 1.36 / storage resilience
     if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     env:
-      KIND_CLUSTER: kama-m1-functional-${{ github.run_id }}-${{ github.run_attempt }}
+      KIND_CLUSTER: kama-e2e-storage-${{ github.run_id }}-${{ github.run_attempt }}
       KIND_NODE_IMAGE: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
       KEDA_VERSION: 2.20.0
     steps:
@@ -72,37 +71,37 @@ jobs:
       - name: Install pinned Kind and Helm
         run: make kind helm
 
-      - name: Run deterministic M1 storage and failure qualification
-        run: make test-m1-functional K8S_MINOR=1.36
+      - name: Run artifact-plane storage resilience suite
+        run: make test-e2e-storage K8S_MINOR=1.36
 
-      - name: Upload functional qualification evidence
+      - name: Upload storage suite evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: m1-functional-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/m1-functional/
+          name: e2e-storage-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2e/storage/
           if-no-files-found: error
           retention-days: 90
 
-  live-huggingface:
-    name: Kubernetes 1.36 / live Hugging Face
+  huggingface-import:
+    name: Artifact plane / Kubernetes 1.36 / Hugging Face import
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: m1-live
+    environment: e2e-huggingface
     outputs:
-      qualifying: ${{ steps.live.outputs.qualifying }}
+      qualifying: ${{ steps.huggingface.outputs.qualifying }}
     env:
-      KIND_CLUSTER: kama-m1-live-${{ github.run_id }}-${{ github.run_attempt }}
+      KIND_CLUSTER: kama-e2e-hf-${{ github.run_id }}-${{ github.run_attempt }}
       KIND_NODE_IMAGE: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
-      EVIDENCE_DIR: dist/m1-live
+      E2E_EVIDENCE_DIR: dist/e2e/huggingface
       # Configure HF_TOKEN as a protected, read-only environment secret. The
       # accompanying artifact identity is non-secret environment metadata.
-      M1_PRIVATE_HF_REPOSITORY: ${{ vars.M1_PRIVATE_HF_REPOSITORY }}
-      M1_PRIVATE_HF_REVISION: ${{ vars.M1_PRIVATE_HF_REVISION }}
-      M1_PRIVATE_HF_FILE: ${{ vars.M1_PRIVATE_HF_FILE }}
-      M1_PRIVATE_HF_SHA256: ${{ vars.M1_PRIVATE_HF_SHA256 }}
-      M1_PRIVATE_HF_SIZE: ${{ vars.M1_PRIVATE_HF_SIZE }}
+      E2E_PRIVATE_HF_REPOSITORY: ${{ vars.E2E_PRIVATE_HF_REPOSITORY }}
+      E2E_PRIVATE_HF_REVISION: ${{ vars.E2E_PRIVATE_HF_REVISION }}
+      E2E_PRIVATE_HF_FILE: ${{ vars.E2E_PRIVATE_HF_FILE }}
+      E2E_PRIVATE_HF_SHA256: ${{ vars.E2E_PRIVATE_HF_SHA256 }}
+      E2E_PRIVATE_HF_SIZE: ${{ vars.E2E_PRIVATE_HF_SIZE }}
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -118,20 +117,20 @@ jobs:
       - name: Install pinned Kind and Helm
         run: make kind helm
 
-      - name: Run live import and cache-recovery qualification
-        id: live
+      - name: Run Hugging Face import and cache-recovery suite
+        id: huggingface
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           # Scheduled/manual executions are strict qualification runs. Trusted
-          # main pushes remain a public live-source regression until configured.
-          M1_REQUIRE_PRIVATE: ${{ github.event_name != 'push' }}
-        run: bash hack/test-m1-live.sh
+          # main pushes remain a public external-source regression until configured.
+          E2E_REQUIRE_PRIVATE_HF: ${{ github.event_name != 'push' }}
+        run: make test-e2e-huggingface K8S_MINOR=1.36
 
-      - name: Upload qualification evidence
+      - name: Upload Hugging Face suite evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: m1-live-${{ github.run_id }}-${{ github.run_attempt }}
-          path: dist/m1-live/
+          name: e2e-huggingface-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2e/huggingface/
           if-no-files-found: error
           retention-days: 90

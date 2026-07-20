@@ -1,0 +1,22 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: e2e-hf-private
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: E2E_PRIVATE_HF_FILE
+  cacheRef:
+    name: e2e-hf-private-cache
+  verification:
+    expectedSHA256: E2E_PRIVATE_HF_SHA256
+    expectedSize: E2E_PRIVATE_HF_SIZE
+  source:
+    huggingFace:
+      repository: E2E_PRIVATE_HF_REPOSITORY
+      revision: E2E_PRIVATE_HF_REVISION
+      files:
+        - E2E_PRIVATE_HF_FILE
+      tokenSecretRef:
+        name: e2e-hf-huggingface-token
+        key: token

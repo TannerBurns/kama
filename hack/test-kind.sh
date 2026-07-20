@@ -48,13 +48,13 @@ cleanup() {
       -l kubernetes.io/service-name=kama-webhook -o yaml || true
     "${kubectl_bin}" -n "${namespace}" logs deployment/kama \
       --all-containers=true --prefix=true --tail=200 || true
-    if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
-      local evidence_dir="${repo_root}/dist/m1-functional"
+    if [[ "${E2E_STORAGE_SUITE:-0}" == "1" ]]; then
+      local evidence_dir="${repo_root}/dist/e2e/storage"
       mkdir -p "${evidence_dir}"
       "${kubectl_bin}" get pods -A -o wide >"${evidence_dir}/failure-pods.txt" 2>&1 || true
       "${kubectl_bin}" get events -A --sort-by=.lastTimestamp \
         >"${evidence_dir}/failure-events.txt" 2>&1 || true
-      "${kubectl_bin}" -n "${namespace}" describe deployment/m1-functional-nfs \
+      "${kubectl_bin}" -n "${namespace}" describe deployment/e2e-storage-nfs \
         >"${evidence_dir}/failure-nfs-server.txt" 2>&1 || true
       "${kubectl_bin}" -n kube-system get deployment/csi-nfs-controller \
         daemonset/csi-nfs-node -o yaml >"${evidence_dir}/failure-nfs-csi.yaml" 2>&1 || true
@@ -200,8 +200,8 @@ docker cp "${tmp_dir}/model.gguf" \
 docker exec "${worker_node}" chmod -R a+rX /var/local/kama-manual
 docker exec "${worker_node}" chmod 0777 /var/local/kama-cache
 sed "s|KAMA_WORKER_NODE|${worker_node}|g" \
-  "${repo_root}/test/kind/m1-storage.yaml" >"${tmp_dir}/m1-storage.yaml"
-"${kubectl_bin}" apply -f "${tmp_dir}/m1-storage.yaml"
+  "${repo_root}/test/kind/artifact-storage.yaml" >"${tmp_dir}/artifact-storage.yaml"
+"${kubectl_bin}" apply -f "${tmp_dir}/artifact-storage.yaml"
 "${kubectl_bin}" -n "${namespace}" wait \
   --for=jsonpath='{.status.phase}'=Bound pvc/kama-manual-models --timeout=60s
 
@@ -390,7 +390,7 @@ if [[ -z "${initial_webhook_leaf}" ]] || [[ "${upgraded_webhook_leaf}" == "${ini
 fi
 wait_for_admission "the webhook certificate-refresh rollout"
 
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-cache.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/kind/modelcache.yaml"
 wait_for_condition modelcache kind-cache Ready 5m
 managed_claim="$("${kubectl_bin}" -n "${namespace}" get modelcache kind-cache \
   -o jsonpath='{.status.claimName}')"
@@ -405,9 +405,9 @@ port_forward_pids+=("$!")
 wait_for_http http://127.0.0.1:18083/health
 curl --fail --silent --show-error --request PUT http://127.0.0.1:18083/state/reset >/dev/null
 
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-artifact-public.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/kind/modelartifact-public.yaml"
 wait_for_condition modelartifact kind-public Ready 5m
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-artifact-private.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/kind/modelartifact-private.yaml"
 wait_for_condition modelartifact kind-private Ready 5m
 
 manager_json="$("${kubectl_bin}" -n "${namespace}" get deployment kama -o json)"
@@ -485,7 +485,7 @@ curl --fail --silent --show-error \
   --data '{"target":"kama/public-gguf/model.gguf","pauseAfterBytes":64}' \
   http://127.0.0.1:18083/state/fault >/dev/null
 apply_with_admission_retry \
-  "${repo_root}/test/kind/m1-artifact-resume.yaml" \
+  "${repo_root}/test/kind/modelartifact-resume.yaml" \
   "the post-restart resumable-import scenario"
 
 resume_state=""
@@ -553,9 +553,9 @@ if [[ "${resume_attempts}" != "2" || "${resume_ranges}" != "1" || \
   echo "interrupted import did not perform one full attempt and one successful Range resume: ${resumed_state}" >&2
   exit 1
 fi
-if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
-  mkdir -p "${repo_root}/dist/m1-functional"
-  jq -S . <<<"${resumed_state}" >"${repo_root}/dist/m1-functional/hub-request-evidence.json"
+if [[ "${E2E_STORAGE_SUITE:-0}" == "1" ]]; then
+  mkdir -p "${repo_root}/dist/e2e/storage"
+  jq -S . <<<"${resumed_state}" >"${repo_root}/dist/e2e/storage/hub-request-evidence.json"
 fi
 
 completed_job_uid="$("${kubectl_bin}" -n "${namespace}" get job "${resume_job}" \
@@ -602,7 +602,7 @@ if [[ "${state_after_job_recovery}" != "${state_before_job_recovery}" ]]; then
   exit 1
 fi
 
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-artifact-copy.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/kind/modelartifact-copy.yaml"
 wait_for_condition modelartifact kind-copy Ready 5m
 copy_claim="$("${kubectl_bin}" -n "${namespace}" get modelartifact kind-copy \
   -o jsonpath='{.status.location.claimName}')"
@@ -611,7 +611,7 @@ if [[ "${copy_claim}" != "${managed_claim}" ]]; then
   exit 1
 fi
 
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-artifact-direct.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/kind/modelartifact-direct.yaml"
 wait_for_condition modelartifact kind-direct Ready 5m
 direct_scope="$("${kubectl_bin}" -n "${namespace}" get modelartifact kind-direct \
   -o jsonpath='{.status.location.mountScope}')"
@@ -621,7 +621,7 @@ if [[ "${direct_scope}" != "SingleNode" ]] || ! grep -Fq "${worker_node}" <<<"${
   exit 1
 fi
 
-"${kubectl_bin}" apply -f "${repo_root}/test/kind/m1-artifact-failures.yaml"
+"${kubectl_bin}" apply -f "${repo_root}/test/kind/modelartifact-failures.yaml"
 wait_for_condition modelartifact kind-checksum-failure ChecksumMismatch 5m
 wait_for_condition modelartifact kind-unauthorized SourceUnavailable 5m
 wait_for_condition modelartifact kind-missing-shard MissingShard 5m
@@ -687,9 +687,9 @@ if ! metric_sample_has_labels kama_model_artifact_validation_duration_seconds_co
   echo "manager metrics are missing successful Hub validation timing" >&2
   exit 1
 fi
-if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
-  mkdir -p "${repo_root}/dist/m1-functional"
-  printf '%s\n' "${metrics_payload}" >"${repo_root}/dist/m1-functional/manager-metrics.prom"
+if [[ "${E2E_STORAGE_SUITE:-0}" == "1" ]]; then
+  mkdir -p "${repo_root}/dist/e2e/storage"
+  printf '%s\n' "${metrics_payload}" >"${repo_root}/dist/e2e/storage/manager-metrics.prom"
 fi
 
 "${kubectl_bin}" -n "${namespace}" port-forward service/kama-fake-llama 18080:8080 \
@@ -706,12 +706,12 @@ if ! grep -Fq '"choices"' <<<"${completion}"; then
   exit 1
 fi
 
-if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
+if [[ "${E2E_STORAGE_SUITE:-0}" == "1" ]]; then
   "${helm_bin}" repo add csi-driver-nfs \
     https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts \
     --force-update
   "${helm_bin}" repo update csi-driver-nfs
-  "${helm_bin}" upgrade --install m1-nfs-csi csi-driver-nfs/csi-driver-nfs \
+  "${helm_bin}" upgrade --install e2e-storage-nfs-csi csi-driver-nfs/csi-driver-nfs \
     --namespace kube-system \
     --version "${nfs_csi_version}" \
     --wait \
@@ -720,47 +720,47 @@ if [[ "${M1_FUNCTIONAL_ACCEPTANCE:-0}" == "1" ]]; then
   "${kubectl_bin}" -n kube-system rollout status daemonset/csi-nfs-node --timeout=3m
 
   sed \
-    -e "s|M1_NFS_SERVER_IMAGE|${nfs_server_image}|g" \
-    -e "s|M1_WORKER_NODE|${worker_node}|g" \
-    "${repo_root}/test/m1-functional/nfs.yaml.tmpl" >"${tmp_dir}/m1-functional-nfs.yaml"
-  "${kubectl_bin}" apply -f "${tmp_dir}/m1-functional-nfs.yaml"
-  "${kubectl_bin}" -n "${namespace}" rollout status deployment/m1-functional-nfs --timeout=2m
+    -e "s|E2E_NFS_SERVER_IMAGE|${nfs_server_image}|g" \
+    -e "s|E2E_WORKER_NODE|${worker_node}|g" \
+    "${repo_root}/test/e2e/storage/nfs.yaml.tmpl" >"${tmp_dir}/e2e-storage-nfs.yaml"
+  "${kubectl_bin}" apply -f "${tmp_dir}/e2e-storage-nfs.yaml"
+  "${kubectl_bin}" -n "${namespace}" rollout status deployment/e2e-storage-nfs --timeout=2m
 
-  M1_RWX_STORAGE_CLASS=m1-functional-nfs \
-    M1_RWX_CSI_DRIVER=nfs.csi.k8s.io \
-    M1_FUNCTIONAL_HELPER_IMAGE="local/kama-m1-functional-helper:${version}" \
-    M1_EVIDENCE_DIR="${repo_root}/dist/m1-functional" \
+  E2E_RWX_STORAGE_CLASS=e2e-storage-nfs \
+    E2E_RWX_CSI_DRIVER=nfs.csi.k8s.io \
+    E2E_STORAGE_HELPER_IMAGE="local/kama-e2e-storage-helper:${version}" \
+    E2E_EVIDENCE_DIR="${repo_root}/dist/e2e/storage" \
     KIND="${kind_bin}" KUBECTL="${kubectl_bin}" KIND_CLUSTER="${cluster_name}" \
-    bash "${repo_root}/hack/test-m1-functional.sh"
+    bash "${repo_root}/hack/test-e2e-storage.sh"
   curl --fail --silent --show-error http://127.0.0.1:18084/metrics \
-    >"${repo_root}/dist/m1-functional/manager-metrics-after-functional.prom"
-  "${kubectl_bin}" version -o json >"${repo_root}/dist/m1-functional/kubernetes-version.json"
-  "${helm_bin}" list --namespace kube-system --filter '^m1-nfs-csi$' --output json \
-    >"${repo_root}/dist/m1-functional/nfs-csi-release.json"
+    >"${repo_root}/dist/e2e/storage/manager-metrics-after-storage.prom"
+  "${kubectl_bin}" version -o json >"${repo_root}/dist/e2e/storage/kubernetes-version.json"
+  "${helm_bin}" list --namespace kube-system --filter '^e2e-storage-nfs-csi$' --output json \
+    >"${repo_root}/dist/e2e/storage/nfs-csi-release.json"
   "${kubectl_bin}" -n kube-system get deployment/csi-nfs-controller daemonset/csi-nfs-node \
     -o json | jq '{items: [.items[] | {
       kind,
       metadata: {name: .metadata.name},
       images: [.spec.template.spec.containers[].image]
-    }]}' >"${repo_root}/dist/m1-functional/nfs-csi-images.json"
+    }]}' >"${repo_root}/dist/e2e/storage/nfs-csi-images.json"
   required_evidence=(
     summary.json
     resources.yaml
     events.txt
     rwx-pv.yaml
-    reader-m1-rwx-reader-worker.log
-    reader-m1-rwx-reader-control.log
+    reader-e2e-rwx-reader-worker.log
+    reader-e2e-rwx-reader-control.log
     enospc-fill.log
     hub-request-evidence.json
-    manager-metrics-after-functional.prom
+    manager-metrics-after-storage.prom
     kubernetes-version.json
     nfs-csi-release.json
     nfs-csi-images.json
     nfs-server-deployment.yaml
   )
   for evidence_file in "${required_evidence[@]}"; do
-    if [[ ! -s "${repo_root}/dist/m1-functional/${evidence_file}" ]]; then
-      echo "M1 functional evidence is missing or empty: ${evidence_file}" >&2
+    if [[ ! -s "${repo_root}/dist/e2e/storage/${evidence_file}" ]]; then
+      echo "E2E storage evidence is missing or empty: ${evidence_file}" >&2
       exit 1
     fi
   done

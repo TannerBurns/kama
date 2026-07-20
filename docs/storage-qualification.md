@@ -1,6 +1,6 @@
-# M1 Storage Qualification
+# Artifact Storage Qualification
 
-Kama's M1 functional storage floor requires a filesystem volume to pass:
+Kama's artifact-plane functional storage floor requires a filesystem volume to pass:
 
 - regular-file `mmap`;
 - durable file and directory `fsync`;
@@ -17,17 +17,17 @@ direct RWO is supported with the PV's node constraints, and direct ROX is read-o
 multi-node storage.
 
 The probe implementation and repository tests establish this contract, not a storage
-qualification result. The self-contained M1 acceptance workflow may establish the
+qualification result. The self-contained artifact-plane E2E suite may establish the
 functional floor with ephemeral test storage inside its runner. Such a result closes
 the M1 storage scenarios but must not be entered as evidence for a named production
 CSI driver/backend.
 
-## M1 functional CI results
+## End-to-end storage results
 
 Record a successful self-contained workflow storage job here after it passes every
-M1 storage scenario. The storage result can be recorded while the independent
-private Hugging Face lane remains open; this table records functional semantics only,
-not overall milestone qualification or a production support matrix.
+artifact-plane storage scenario. The storage result can be recorded while the
+independent private Hugging Face lane remains open; this table records functional
+semantics only, not overall milestone qualification or a production support matrix.
 
 | Date | Commit | Workflow run | Kubernetes | Test driver/service | RWX cross-node | RWO topology | ENOSPC and publication safety | Evidence |
 |---|---|---|---|---|---|---|---|---|

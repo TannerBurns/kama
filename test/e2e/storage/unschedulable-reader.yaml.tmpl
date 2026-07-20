@@ -1,16 +1,16 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: m1-rwo-wrong-node
-  namespace: M1_NAMESPACE
+  name: e2e-rwo-wrong-node
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false
   enableServiceLinks: false
   nodeSelector:
-    kubernetes.io/hostname: M1_WRONG_NODE
+    kubernetes.io/hostname: E2E_WRONG_NODE
   tolerations:
     - operator: Exists
   securityContext:
@@ -21,10 +21,10 @@ spec:
       type: RuntimeDefault
   containers:
     - name: reader
-      image: M1_HELPER_IMAGE
+      image: E2E_HELPER_IMAGE
       imagePullPolicy: Never
       command:
-        - /m1-functional-helper
+        - /e2e-storage-helper
       args:
         - verify-tree
         - --root=/artifact
@@ -46,10 +46,10 @@ spec:
       volumeMounts:
         - name: artifact
           mountPath: /artifact
-          subPath: M1_RWO_SUBPATH
+          subPath: E2E_RWO_SUBPATH
           readOnly: true
   volumes:
     - name: artifact
       persistentVolumeClaim:
-        claimName: m1-functional-source
+        claimName: e2e-storage-source
         readOnly: true

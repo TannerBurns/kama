@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: PersistentVolume
 metadata:
-  name: kama-m1-live-cache
+  name: kama-e2e-hf-cache
 spec:
   capacity:
     storage: 2Gi
@@ -9,9 +9,9 @@ spec:
   accessModes:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: kama-m1-live-local
+  storageClassName: kama-e2e-hf-local
   local:
-    path: /var/local/kama-m1-live-cache
+    path: /var/local/kama-e2e-hf-cache
   nodeAffinity:
     required:
       nodeSelectorTerms:
@@ -24,14 +24,14 @@ spec:
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelCache
 metadata:
-  name: m1-live-cache
+  name: e2e-hf-cache
   namespace: kama-system
 spec:
   retentionPolicy: Retain
   storage:
     claimTemplate:
       spec:
-        storageClassName: kama-m1-live-local
+        storageClassName: kama-e2e-hf-local
         accessModes:
           - ReadWriteOnce
         volumeMode: Filesystem

@@ -34,7 +34,7 @@ fixtures used.
 - Kind clusters for installation, namespace isolation, NetworkPolicy manifests,
   gateway failover, KEDA activation, upgrade, and uninstall retention.
 
-### Self-contained M1 functional acceptance
+### Self-contained artifact-plane end-to-end acceptance
 
 - A trusted hosted-runner workflow creates a two-node Kubernetes cluster and all
   functional storage services inside the runner, then imports immutable public and
@@ -45,9 +45,9 @@ fixtures used.
 - Functional RWX cross-node reads, adopted RWO topology, corruption, incomplete
   content, authorization failure, and actual filesystem exhaustion are exercised in
   one evidence-producing workflow.
-- A passing immutable run closes M1 functional acceptance. It does not qualify or
-  advertise a named production CSI driver, backend, durability level, or performance
-  profile.
+- A passing immutable artifact-plane E2E run closes M1 functional acceptance. It does
+  not qualify or advertise a named production CSI driver, backend, durability level,
+  or performance profile.
 
 ### Real hardware end-to-end tests
 

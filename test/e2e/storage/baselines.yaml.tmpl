@@ -1,31 +1,31 @@
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelArtifact
 metadata:
-  name: m1-rwx-baseline
-  namespace: M1_NAMESPACE
+  name: e2e-rwx-baseline
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   format: GGUF
   entrypoint: model.gguf
   cacheRef:
-    name: m1-functional-rwx
+    name: e2e-storage-rwx
   verification:
     expectedSHA256: "0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94"
     expectedSize: 180
   source:
     persistentVolumeClaim:
-      claimName: m1-functional-source
+      claimName: e2e-storage-source
       rootPath: models
       importPolicy: Copy
 ---
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelArtifact
 metadata:
-  name: m1-rwo-direct
-  namespace: M1_NAMESPACE
+  name: e2e-rwo-direct
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   format: GGUF
   entrypoint: model.gguf
@@ -34,27 +34,27 @@ spec:
     expectedSize: 180
   source:
     persistentVolumeClaim:
-      claimName: m1-functional-source
+      claimName: e2e-storage-source
       rootPath: models
       importPolicy: Direct
 ---
 apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelArtifact
 metadata:
-  name: m1-full-baseline
-  namespace: M1_NAMESPACE
+  name: e2e-full-baseline
+  namespace: E2E_NAMESPACE
   labels:
-    app.kubernetes.io/name: kama-m1-functional
+    app.kubernetes.io/name: kama-e2e-storage
 spec:
   format: GGUF
   entrypoint: model.gguf
   cacheRef:
-    name: m1-functional-full
+    name: e2e-storage-full
   verification:
     expectedSHA256: "0e1ec3e53960fdc1556515b1368222af8acbd0d346447b1a724bdaaeb3fa1e94"
     expectedSize: 180
   source:
     persistentVolumeClaim:
-      claimName: m1-functional-source
+      claimName: e2e-storage-source
       rootPath: models
       importPolicy: Copy

@@ -51,11 +51,11 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 ## M1 - Persistent artifact plane
 
 **Status: In Progress.** The repository-scoped implementation, CI/Kind gates, pinned
-public Hugging Face lane, and functional storage/failure lanes are verified at
+public Hugging Face E2E lane, and E2E storage/failure lanes are verified at
 [`5a7390176fd6eecf37a5f6803197a87abe92fa40`](https://github.com/TannerBurns/kama/commit/5a7390176fd6eecf37a5f6803197a87abe92fa40)
 and [workflow run 29763107454](https://github.com/TannerBurns/kama/actions/runs/29763107454).
 M1 remains open only because the required project-controlled private Hugging Face
-repository and read-only token are not configured, so the successful live job
+repository and read-only token are not configured, so the successful Hugging Face job
 correctly recorded `qualifying=false`. Qualification of a named production CSI
 driver/backend is a separate compatibility and release gate; it does not block M1
 functional acceptance.
