@@ -191,6 +191,8 @@ for dockerfile in "${runtime_cpu_dockerfile}" "${runtime_cuda_dockerfile}"; do
     ! grep -Fq 'io.kama.llama.cpp.commit="${LLAMA_CPP_COMMIT}"' "${dockerfile}" ||
     ! grep -Fq 'io.kama.llama.cpp.build-number="${LLAMA_CPP_BUILD_NUMBER}"' "${dockerfile}" ||
     ! grep -Fq 'io.kama.llama.cpp.source-sha256="${LLAMA_CPP_SOURCE_SHA256}"' "${dockerfile}" ||
+    ! grep -Fq 'ARG BUILD_JOBS=2' "${dockerfile}" ||
+    ! grep -Fq -- '--parallel "${BUILD_JOBS}"' "${dockerfile}" ||
     ! grep -Fq 'internal/runtime.LlamaCPPBuildNumber=${LLAMA_CPP_BUILD_NUMBER}' "${dockerfile}"; then
     echo "${dockerfile} does not match the pinned llama.cpp source identity" >&2
     exit 1

@@ -11,6 +11,7 @@ FROM docker.io/library/ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5ab
 ARG LLAMA_CPP_COMMIT=af6528e6df5d798f7f1363ec1141699be0f638e2
 ARG LLAMA_CPP_BUILD_NUMBER=9445
 ARG LLAMA_CPP_SOURCE_SHA256=8bb78d0331d7be27fae4321977eb5f3c686af85cae13c74e6a6b9150e90e4f18
+ARG BUILD_JOBS=2
 ARG SOURCE_DATE_EPOCH=0
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -47,7 +48,7 @@ RUN cmake -S . -B build \
       -DLLAMA_BUILD_UI=OFF \
       -DLLAMA_USE_PREBUILT_UI=OFF \
       -DLLAMA_OPENSSL=OFF \
-    && cmake --build build --config Release --target llama-server --parallel
+    && cmake --build build --config Release --target llama-server --parallel "${BUILD_JOBS}"
 
 FROM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS supervisor-builder
 
