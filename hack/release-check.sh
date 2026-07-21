@@ -162,12 +162,21 @@ if ! grep -Fq 'make verify-e2e-serving-cpu-evidence K8S_MINOR=${{ matrix.kuberne
   echo "hosted workflows do not enforce the M2 CPU evidence gates" >&2
   exit 1
 fi
+if ! grep -Fq 'require_private_hf:' "${e2e_workflow}" ||
+  ! grep -Fq "E2E_REQUIRE_PRIVATE_HF: \${{ github.event_name == 'workflow_dispatch' && inputs.require_private_hf" "${e2e_workflow}"; then
+  echo "scheduled Hugging Face regression is not isolated from opt-in private qualification" >&2
+  exit 1
+fi
 if ! grep -Fq 'runs-on: [self-hosted, Linux, X64, kama-nvidia]' "${nvidia_workflow}" ||
   ! grep -Fq 'run: make helm cosign' "${nvidia_workflow}" ||
   ! grep -Fq 'run: make verify-e2e-serving-nvidia-evidence' "${nvidia_workflow}" ||
   ! grep -Fq 'name: Protected NVIDIA acceptance gate' "${nvidia_workflow}" ||
   ! grep -Fq 'rm -f -- "${KUBECONFIG_PATH}"' "${nvidia_workflow}"; then
   echo "protected workflow does not enforce the NVIDIA evidence and credential-cleanup gate" >&2
+  exit 1
+fi
+if grep -Fq '  schedule:' "${nvidia_workflow}"; then
+  echo "protected NVIDIA qualification must remain manual-only" >&2
   exit 1
 fi
 

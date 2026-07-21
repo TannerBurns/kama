@@ -1,8 +1,6 @@
 name: Protected NVIDIA end-to-end
 
 on:
-  schedule:
-    - cron: "41 4 * * *"
   workflow_dispatch:
 
 permissions:

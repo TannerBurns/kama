@@ -23,6 +23,12 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      require_private_hf:
+        description: Require the protected private Hugging Face qualification lane
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -97,7 +103,8 @@ jobs:
       KIND_NODE_IMAGE: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
       E2E_EVIDENCE_DIR: dist/e2e/huggingface
       # Configure HF_TOKEN as a protected, read-only environment secret. The
-      # accompanying artifact identity is non-secret environment metadata.
+      # accompanying artifact identity is non-secret environment metadata. These
+      # values are consumed only by an explicit private-lane manual dispatch.
       E2E_PRIVATE_HF_REPOSITORY: ${{ vars.E2E_PRIVATE_HF_REPOSITORY }}
       E2E_PRIVATE_HF_REVISION: ${{ vars.E2E_PRIVATE_HF_REVISION }}
       E2E_PRIVATE_HF_FILE: ${{ vars.E2E_PRIVATE_HF_FILE }}
@@ -121,10 +128,11 @@ jobs:
       - name: Run Hugging Face import and cache-recovery suite
         id: huggingface
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # Scheduled/manual executions are strict qualification runs. Trusted
-          # main pushes remain a public external-source regression until configured.
-          E2E_REQUIRE_PRIVATE_HF: ${{ github.event_name != 'push' }}
+          HF_TOKEN: ${{ github.event_name == 'workflow_dispatch' && inputs.require_private_hf && secrets.HF_TOKEN || '' }}
+          # The ordinary push, schedule, and manual lanes are pinned public-source
+          # regressions. Private-source qualification is an explicit, fail-closed
+          # manual follow-up after its protected inputs are configured.
+          E2E_REQUIRE_PRIVATE_HF: ${{ github.event_name == 'workflow_dispatch' && inputs.require_private_hf && 'true' || 'false' }}
         run: make test-e2e-huggingface K8S_MINOR=1.36
 
       - name: Upload Hugging Face suite evidence

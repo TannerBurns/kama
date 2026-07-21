@@ -16,9 +16,10 @@ for in-process controller integration.
 
 The storage suite is deterministic and uses the repository's fake Hub plus an
 in-runner NFS service. The Hugging Face suite always imports the pinned public
-SmolLM2 GGUF and optionally exercises a protected private repository. Scheduled and
-manual runs require that private lane; trusted pushes may produce public-only
-regression evidence.
+SmolLM2 GGUF and optionally exercises a protected private repository. Trusted pushes,
+scheduled runs, and ordinary manual dispatches produce public-only regression
+evidence. A manual dispatch with `require_private_hf=true` explicitly enables the
+fail-closed private-source follow-up.
 
 GitHub runs both suites as parallel jobs in
 [the end-to-end workflow](../../.github/workflows/e2e.yml). The protected
@@ -36,8 +37,9 @@ manifest digests and OCI labels, then loaded into each isolated cluster under
 run-local tags with `imagePullPolicy: Never`. Those tags are transport aliases, not
 published image identities. NVIDIA serving runs only from trusted `main` history on
 `[self-hosted, Linux, X64, kama-nvidia]` with a protected kubeconfig. Pull requests
-never receive that kubeconfig or GPU environment. Both serving suites use a genuinely
-loadable model and production runtime images; the synthetic GGUF and fake
+never receive that kubeconfig or GPU environment, and the NVIDIA workflow is
+manual-only. Both serving suites use a genuinely loadable model and production
+runtime images; the synthetic GGUF and fake
 llama-server remain nonproduction controller fixtures.
 
 The NVIDIA runner should be ephemeral; if that is not possible, its runner group and
@@ -48,7 +50,7 @@ promotion. A hosted validation job deliberately fails a manual dispatch from a
 non-`main` ref. The GPU job checks out the immutable
 `E2E_NVIDIA_EXPECTED_COMMIT` rather than the moving workflow SHA, fetches full
 history, and accepts it only when it is an ancestor of current `origin/main`; this
-lets scheduled validation exercise the published images' exact source commit without
+lets manual validation exercise the published images' exact source commit without
 allowing stale or untrusted branch code. Its protected kubeconfig is written to a
 run-specific file with mode `0600` and removed in an `always()` cleanup step. The
 protected cluster API server must be in the supported Kubernetes 1.34–1.36 range.
