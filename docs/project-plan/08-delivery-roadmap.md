@@ -88,10 +88,10 @@ Named storage compatibility results: [storage qualification](../storage-qualific
 
 **Status: In Progress (updated 2026-07-21).** Qualifying hosted CPU/Kind acceptance
 passed across Kubernetes 1.34–1.36, including real model download, singleton serving,
-generated-content inference, drain, and terminal load-failure evidence. Published and
-signed production runtime-image qualification, protected real-NVIDIA validation, and
-direct system-level artifact identity/location transition coverage remain pending in
-the [M2 acceptance checklist](../acceptance/m2.md).
+generated-content inference, drain, artifact identity transition/recovery, and terminal
+load-failure evidence. Published and signed production runtime-image qualification and
+protected real-NVIDIA validation remain pending in the
+[M2 acceptance checklist](../acceptance/m2.md).
 
 ### Deliverables
 
@@ -106,7 +106,7 @@ the [M2 acceptance checklist](../acceptance/m2.md).
 - [ ] A verified model starts on one NVIDIA GPU and serves direct internal streaming
   requests.
 - [x] CPU-only works with an explicit `Degraded` status.
-- [ ] An artifact that has never loaded, a changed artifact identity/location, or a
+- [x] An artifact that has never loaded, a changed artifact identity/location, or a
   terminal load failure creates neither a restart loop nor a ready endpoint. A transient
   readiness outage for the unchanged artifact may preserve an already-loaded ready
   endpoint while rollout remains frozen.
