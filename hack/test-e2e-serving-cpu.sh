@@ -127,7 +127,11 @@ evidence_is_complete() {
       .runtimeIdentityMatched == true and .restrictedWorkload == true and
       .servicePortContract == true and .rwoPlacementMatched == true
     ' "${evidence_dir}/serving-contract.json" >/dev/null ||
-    ! jq -e '.completed == true and .stream == true' \
+    ! jq -e '
+      .completed == true and .stream == true and .generatedContentObserved == true and
+      (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+      (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0
+    ' \
       "${evidence_dir}/direct-request.json" >/dev/null ||
     ! jq -e '
       .supervisorAliveWhileLoading == true and .runtimeReadyWhileLoading == false and
@@ -381,6 +385,8 @@ run_in_cluster_serving_client() {
   local model_name=$3
   local manifest="${tmp_dir}/${job_name}.yaml"
   local completed=0
+  local generated_content_fragments=0
+  local generated_content_bytes=0
 
   sed \
     -e "s|KAMA_SERVING_CLIENT_NAME|${job_name}|g" \
@@ -403,20 +409,31 @@ run_in_cluster_serving_client() {
     status: .status
   }' >"${evidence_dir}/direct-request-job.json" 2>/dev/null || true
   if [[ ${completed} -ne 1 ]] || ! jq -e \
-    '.schemaVersion == 1 and .sseDataEvents > 0 and .done == true' \
+    '.schemaVersion == 1 and .sseDataEvents > 0 and
+     (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+     (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and .done == true' \
     "${evidence_dir}/direct-request.log" >/dev/null 2>&1; then
-    echo "in-cluster CPU serving client did not observe a complete SSE response" >&2
+    echo "in-cluster CPU serving client did not observe generated content in a complete SSE response" >&2
     return 1
   fi
+  generated_content_fragments="$(jq -r '.generatedContentFragments' \
+    "${evidence_dir}/direct-request.log")"
+  generated_content_bytes="$(jq -r '.generatedContentBytes' \
+    "${evidence_dir}/direct-request.log")"
   jq -n \
     --arg image "${fixtures_image}" \
     --arg imageDigest "${fixtures_manifest_digest}" \
     --arg job "${job_name}" \
-    --arg serviceDNS "${service_name}.${namespace}.svc" '{
+    --arg serviceDNS "${service_name}.${namespace}.svc" \
+    --argjson generatedContentFragments "${generated_content_fragments}" \
+    --argjson generatedContentBytes "${generated_content_bytes}" '{
       transport: "in-cluster ClusterIP Service DNS",
       route: "/v1/chat/completions",
       stream: true,
       completed: true,
+      generatedContentObserved: true,
+      generatedContentFragments: $generatedContentFragments,
+      generatedContentBytes: $generatedContentBytes,
       clientImage: $image,
       clientImageManifestDigest: $imageDigest,
       job: $job,

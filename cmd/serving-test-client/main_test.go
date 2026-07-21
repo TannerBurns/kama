@@ -24,7 +24,7 @@ import (
 	"testing"
 )
 
-func TestRequestStreamingChatRequiresDataAndDone(t *testing.T) {
+func TestRequestStreamingChatRequiresGeneratedContentAndDone(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -42,7 +42,10 @@ func TestRequestStreamingChatRequiresDataAndDone(t *testing.T) {
 			t.Errorf("payload = %+v", payload)
 		}
 		writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
-		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"id\":\"chunk-1\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8}}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}},{\"delta\":{\"content\":\"\"}}]}\n\n"))
+		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"))
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -51,7 +54,8 @@ func TestRequestStreamingChatRequiresDataAndDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("requestStreamingChat() error = %v", err)
 	}
-	if summary.SSEDataEvents != 1 || !summary.Done {
+	if summary.SSEDataEvents != 4 || summary.GeneratedContentFragments != 2 ||
+		summary.GeneratedContentBytes != 5 || !summary.Done {
 		t.Fatalf("summary = %+v", summary)
 	}
 }
@@ -60,8 +64,12 @@ func TestRequestStreamingChatRejectsIncompleteSSE(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]string{
-		"done without data": "data: [DONE]\n\n",
-		"data without done": "data: {\"choices\":[]}\n\n",
+		"done without data":         "data: [DONE]\n\n",
+		"metadata and role only":    "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\ndata: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n",
+		"content without done":      "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
+		"malformed JSON":            "data: {not-json}\n\ndata: [DONE]\n\n",
+		"invalid content shape":     "data: {\"choices\":[{\"delta\":{\"content\":[\"hello\"]}}]}\n\ndata: [DONE]\n\n",
+		"error object without text": "data: {\"error\":{\"message\":\"load failed\"}}\n\ndata: [DONE]\n\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {

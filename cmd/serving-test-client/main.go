@@ -42,9 +42,19 @@ const (
 )
 
 type streamSummary struct {
-	SchemaVersion int  `json:"schemaVersion"`
-	SSEDataEvents int  `json:"sseDataEvents"`
-	Done          bool `json:"done"`
+	SchemaVersion             int  `json:"schemaVersion"`
+	SSEDataEvents             int  `json:"sseDataEvents"`
+	GeneratedContentFragments int  `json:"generatedContentFragments"`
+	GeneratedContentBytes     int  `json:"generatedContentBytes"`
+	Done                      bool `json:"done"`
+}
+
+type chatCompletionChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content *string `json:"content"`
+		} `json:"delta"`
+	} `json:"choices"`
 }
 
 func main() {
@@ -137,19 +147,33 @@ func requestStreamingChat(
 			continue
 		}
 		if data == "[DONE]" {
-			if summary.SSEDataEvents == 0 {
-				return streamSummary{}, errors.New("SSE completion arrived before any data event")
+			if summary.GeneratedContentFragments == 0 {
+				return streamSummary{}, errors.New("SSE completion arrived before generated assistant content")
 			}
 			summary.Done = true
 			return summary, nil
 		}
+		var chunk chatCompletionChunk
+		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+			return streamSummary{}, fmt.Errorf("decode OpenAI chat-completion SSE chunk: %w", err)
+		}
 		summary.SSEDataEvents++
+		for _, choice := range chunk.Choices {
+			if choice.Delta.Content == nil || *choice.Delta.Content == "" {
+				continue
+			}
+			summary.GeneratedContentFragments++
+			summary.GeneratedContentBytes += len(*choice.Delta.Content)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return streamSummary{}, fmt.Errorf("read SSE response: %w", err)
 	}
 	if summary.SSEDataEvents == 0 {
 		return streamSummary{}, errors.New("SSE response contained no data event")
+	}
+	if summary.GeneratedContentFragments == 0 {
+		return streamSummary{}, errors.New("SSE response contained no generated assistant content")
 	}
 	return streamSummary{}, errors.New("SSE response ended without data: [DONE]")
 }

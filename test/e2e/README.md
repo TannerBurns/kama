@@ -54,8 +54,10 @@ run-specific file with mode `0600` and removed in an `always()` cleanup step. Th
 protected cluster API server must be in the supported Kubernetes 1.34–1.36 range.
 
 The serving data-path check runs Kama's static client in a bounded in-cluster Job and
-requires a nonempty SSE data event followed by `data: [DONE]` through the generated
-ClusterIP Service DNS. Pod port-forwarding is reserved for supervisor diagnostics and
+requires a valid OpenAI-compatible SSE chunk containing nonempty generated assistant
+content followed by `data: [DONE]` through the generated ClusterIP Service DNS. Role,
+usage, and other metadata-only chunks are accepted but do not satisfy the generated
+content assertion. Pod port-forwarding is reserved for supervisor diagnostics and
 the CPU suite's active drain orchestration; it is not ClusterIP reachability evidence.
 
 Serving evidence is qualifying only when every image used for the run has an

@@ -72,6 +72,8 @@ client_pod_uid=""
 client_resolved_image=""
 client_restart_count=-1
 client_completed=0
+client_generated_content_fragments=0
+client_generated_content_bytes=0
 port_forward_pids=()
 
 rm -rf -- "${evidence_dir}"
@@ -873,11 +875,17 @@ run_in_cluster_serving_client() {
     status: .status
   }' >"${evidence_dir}/direct-request-job.json" 2>/dev/null || true
   if [[ ${completed} -ne 1 ]] || ! jq -e \
-    '.schemaVersion == 1 and .sseDataEvents > 0 and .done == true' \
+    '.schemaVersion == 1 and .sseDataEvents > 0 and
+     (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+     (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and .done == true' \
     "${evidence_dir}/direct-request.log" >/dev/null 2>&1; then
-    echo "in-cluster NVIDIA serving client did not observe a complete SSE response" >&2
+    echo "in-cluster NVIDIA serving client did not observe generated content in a complete SSE response" >&2
     return 1
   fi
+  client_generated_content_fragments="$(jq -r '.generatedContentFragments' \
+    "${evidence_dir}/direct-request.log")"
+  client_generated_content_bytes="$(jq -r '.generatedContentBytes' \
+    "${evidence_dir}/direct-request.log")"
 
   client_pods_json="$("${kubectl_bin}" -n "${namespace}" get pods \
     -l "batch.kubernetes.io/job-name=${job_name}" -o json)"
@@ -1142,11 +1150,16 @@ jq -n \
   --arg driverVersion "${observed_driver_version}" \
   --arg cudaVersion "${observed_cuda_version}" \
   --argjson completed "${client_completed}" \
-  --argjson restartCount "${client_restart_count}" '{
+  --argjson restartCount "${client_restart_count}" \
+  --argjson generatedContentFragments "${client_generated_content_fragments}" \
+  --argjson generatedContentBytes "${client_generated_content_bytes}" '{
   transport: "in-cluster ClusterIP Service DNS",
   route: "/v1/chat/completions",
   stream: true,
   completed: ($completed == 1),
+  generatedContentObserved: ($generatedContentFragments > 0 and $generatedContentBytes > 0),
+  generatedContentFragments: $generatedContentFragments,
+  generatedContentBytes: $generatedContentBytes,
   clientImage: $clientImage,
   clientResolvedImage: $clientResolvedImage,
   clientPod: $clientPod,

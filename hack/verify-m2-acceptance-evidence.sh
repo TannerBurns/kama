@@ -172,11 +172,16 @@ verify_cpu() {
     .runtime.desiredImage == $image
   ' --arg image "$(jq -r '.images.runtimeCPU.reference' "${evidence_dir}/identities.json")"
   assert_json direct-request.log "complete CPU SSE response" '
-    .schemaVersion == 1 and .sseDataEvents > 0 and .done == true
+    .schemaVersion == 1 and .sseDataEvents > 0 and
+    (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+    (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and .done == true
   '
   assert_json direct-request.json "in-cluster CPU Service request evidence" '
     .transport == "in-cluster ClusterIP Service DNS" and
     .route == "/v1/chat/completions" and .stream == true and .completed == true and
+    .generatedContentObserved == true and
+    (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+    (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and
     (.serviceDNS | type == "string" and endswith(".kama-system.svc")) and
     .clientImageManifestDigest == $digest
   ' --arg digest "$(jq -r '.images.servingClient.manifestDigest' "${evidence_dir}/identities.json")"
@@ -339,11 +344,16 @@ verify_nvidia() {
     ((.serverVersion.minor | sub("[+]$"; "")) | IN("34", "35", "36"))
   '
   assert_json direct-request.log "complete NVIDIA SSE response" '
-    .schemaVersion == 1 and .sseDataEvents > 0 and .done == true
+    .schemaVersion == 1 and .sseDataEvents > 0 and
+    (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+    (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and .done == true
   '
   assert_json direct-request.json "one-GPU in-cluster Service request" '
     .transport == "in-cluster ClusterIP Service DNS" and
     .route == "/v1/chat/completions" and .stream == true and .completed == true and
+    .generatedContentObserved == true and
+    (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+    (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and
     (.serviceDNS | type == "string" and length > 0) and
     (.gpuDevice | type == "string" and length > 0) and
     (.gpuUUID | type == "string" and length > 0) and
