@@ -454,21 +454,22 @@ if [[ "${CHECK_IMAGES:-0}" == "1" ]]; then
     printf '%s\n' "${llama_version}" >&2
     exit 1
   fi
-  # libcuda is injected by the NVIDIA container runtime and is intentionally
-  # absent on ordinary hosted runners. Validate the CUDA binary and its embedded
-  # source identity without executing it here; the protected NVIDIA lane executes
-  # the same binary and verifies driver/CUDA linkage, offload, and inference.
+  # libcuda is supplied by the NVIDIA container runtime and may be unresolved on
+  # a hosted runner. Inspect the CUDA executable without starting it here; the
+  # protected NVIDIA lane starts this image and proves device use/offload/SSE.
   if ! docker run --rm --entrypoint /bin/sh "${runtime_cuda_image}" -c \
-    'test -x /usr/local/bin/llama-server && grep -aF "$1" /usr/local/bin/llama-server >/dev/null' \
+    'test -s /usr/local/bin/llama-server && test -x /usr/local/bin/llama-server && LC_ALL=C grep -aF -- "$1" /usr/local/bin/llama-server >/dev/null' \
     _ "${llama_cpp_commit}"; then
-    echo "CUDA runtime image ${runtime_cuda_image} does not contain the pinned llama-server binary" >&2
+    echo "CUDA runtime image ${runtime_cuda_image} does not contain the pinned executable llama-server" >&2
     exit 1
   fi
   cuda_linkage="$(docker run --rm --entrypoint /bin/sh "${runtime_cuda_image}" -c \
     'ldd /usr/local/bin/llama-server' 2>&1 || true)"
-  if ! grep -Eq 'libcudart\.so\.12 => /' <<<"${cuda_linkage}" ||
-    ! grep -Eq 'libcublas\.so\.12 => /' <<<"${cuda_linkage}" ||
-    ! grep -Eq 'libcuda\.so\.1 => not found' <<<"${cuda_linkage}"; then
+  cuda_unresolved="$(awk '$2 == "=>" && $3 == "not" && $4 == "found" && $1 != "libcuda.so.1" { print }' <<<"${cuda_linkage}")"
+  if ! grep -Eq 'libcudart\.so\.12[[:space:]]+=>[[:space:]]+/[^[:space:]]+' <<<"${cuda_linkage}" ||
+    ! grep -Eq 'libcublas\.so\.12[[:space:]]+=>[[:space:]]+/[^[:space:]]+' <<<"${cuda_linkage}" ||
+    ! grep -Eq 'libcuda\.so\.1[[:space:]]+=>[[:space:]]+(not found|/[^[:space:]]+)' <<<"${cuda_linkage}" ||
+    [[ -n "${cuda_unresolved}" ]]; then
     echo "CUDA runtime image ${runtime_cuda_image} has unexpected GPU-independent linkage" >&2
     printf '%s\n' "${cuda_linkage}" >&2
     exit 1
