@@ -44,7 +44,9 @@ func TestRequestStreamingChatRequiresGeneratedContentAndDone(t *testing.T) {
 		writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		_, _ = writer.Write([]byte("data: {\"id\":\"chunk-1\",\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n"))
 		_, _ = writer.Write([]byte("data: {\"choices\":[],\"usage\":{\"prompt_tokens\":8}}\n\n"))
-		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}},{\"delta\":{\"content\":\"\"}}]}\n\n"))
+		_, _ = writer.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}},{\"delta\":{\"content\":\"\"}}]}\n\n",
+		))
 		_, _ = writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n"))
 		_, _ = writer.Write([]byte("data: [DONE]\n\n"))
 	}))
@@ -65,7 +67,8 @@ func TestRequestStreamingChatRejectsIncompleteSSE(t *testing.T) {
 
 	tests := map[string]string{
 		"done without data":         "data: [DONE]\n\n",
-		"metadata and role only":    "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\ndata: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n",
+		"metadata and role only": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n" +
+			"data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n",
 		"content without done":      "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
 		"malformed JSON":            "data: {not-json}\n\ndata: [DONE]\n\n",
 		"invalid content shape":     "data: {\"choices\":[{\"delta\":{\"content\":[\"hello\"]}}]}\n\ndata: [DONE]\n\n",
