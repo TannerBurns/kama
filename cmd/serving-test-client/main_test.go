@@ -66,7 +66,7 @@ func TestRequestStreamingChatRejectsIncompleteSSE(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]string{
-		"done without data":         "data: [DONE]\n\n",
+		"done without data": "data: [DONE]\n\n",
 		"metadata and role only": "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":null}}]}\n\n" +
 			"data: {\"choices\":[],\"usage\":{}}\n\ndata: [DONE]\n\n",
 		"content without done":      "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n",
