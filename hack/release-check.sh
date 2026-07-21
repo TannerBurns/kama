@@ -254,6 +254,7 @@ if ! grep -Fq -- '-DGGML_NATIVE=OFF' "${runtime_cpu_dockerfile}"; then
   exit 1
 fi
 cuda_architectures='60;61;70;75;80;86;89;90'
+ci_cuda_architectures='60;90'
 if ! grep -Fq "ARG CUDA_ARCHITECTURES=${cuda_architectures}" "${runtime_cuda_dockerfile}" ||
   ! grep -Fq -- '-DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}"' "${runtime_cuda_dockerfile}" ||
   ! grep -Fq -- '-DGGML_NATIVE=OFF' "${runtime_cuda_dockerfile}" ||
@@ -262,6 +263,16 @@ if ! grep -Fq "ARG CUDA_ARCHITECTURES=${cuda_architectures}" "${runtime_cuda_doc
   ! grep -Fq 'test "${TARGETOS}/${TARGETARCH}" = "linux/amd64"' "${runtime_cuda_dockerfile}" ||
   ! grep -Fq "io.kama.cuda.version=\"${cuda_version}\"" "${runtime_cuda_dockerfile}"; then
   echo "CUDA runtime does not enforce the approved portable amd64 CUDA build" >&2
+  exit 1
+fi
+if ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES ?= ${cuda_architectures}" "${repo_root}/Makefile" ||
+  ! grep -Fq -- '--build-arg CUDA_ARCHITECTURES="$(RUNTIME_CUDA_ARCHITECTURES)"' \
+    "${repo_root}/Makefile" ||
+  ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES: \"${ci_cuda_architectures}\"" \
+    "${repo_root}/.github/workflows/ci.yml" ||
+  grep -Fq "CUDA_ARCHITECTURES=${ci_cuda_architectures}" \
+    "${repo_root}/.github/workflows/release.yml"; then
+  echo "CUDA architecture coverage does not keep full release builds and bounded PR validation" >&2
   exit 1
 fi
 if ! grep -Fq 'RUNTIME_CPU_PLATFORMS ?= linux/amd64,linux/arm64' "${repo_root}/Makefile" ||

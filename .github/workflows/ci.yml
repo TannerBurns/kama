@@ -89,6 +89,9 @@ jobs:
       FIXTURES_IMG: local/kama-test-fixtures:ci
       RUNTIME_CPU_IMG: local/kama-runtime-cpu:ci
       RUNTIME_CUDA_IMG: local/kama-runtime-cuda:ci
+      # Exercise the lowest and highest supported CUDA code-generation boundaries
+      # on ordinary PRs. Release builds retain the full production architecture set.
+      RUNTIME_CUDA_ARCHITECTURES: "60;90"
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

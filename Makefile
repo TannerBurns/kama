@@ -23,6 +23,7 @@ RUNTIME_CUDA_IMG ?= $(REGISTRY)/kama-runtime-cuda:$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
 RUNTIME_CPU_PLATFORMS ?= linux/amd64,linux/arm64
 RUNTIME_CUDA_PLATFORMS ?= linux/amd64
+RUNTIME_CUDA_ARCHITECTURES ?= 60;61;70;75;80;86;89;90
 CONTAINER_TOOL ?= docker
 LOCALBIN ?= $(CURDIR)/bin
 DIST ?= $(CURDIR)/dist
@@ -225,6 +226,7 @@ container: ## Build versioned manager, importer, and test-fixture container imag
 		-t "$(RUNTIME_CPU_IMG)" -f Dockerfile.runtime-cpu .
 	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" --build-arg LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" \
 		--build-arg LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" --build-arg LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" \
+		--build-arg CUDA_ARCHITECTURES="$(RUNTIME_CUDA_ARCHITECTURES)" \
 		-t "$(RUNTIME_CUDA_IMG)" -f Dockerfile.runtime-cuda .
 
 .PHONY: container-multiarch
@@ -239,6 +241,7 @@ container-multiarch: ## Build and push multi-architecture images (release workfl
 	$(CONTAINER_TOOL) buildx build --push --platform "$(RUNTIME_CUDA_PLATFORMS)" --build-arg VERSION="$(VERSION)" \
 		--build-arg LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" --build-arg LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \
 		--build-arg LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" \
+		--build-arg CUDA_ARCHITECTURES="$(RUNTIME_CUDA_ARCHITECTURES)" \
 		-t "$(RUNTIME_CUDA_IMG)" -f Dockerfile.runtime-cuda .
 
 .PHONY: helm-validate
