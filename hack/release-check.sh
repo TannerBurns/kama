@@ -155,6 +155,7 @@ done
 kind_workflow="${repo_root}/.github/workflows/kind.yml"
 e2e_workflow="${repo_root}/.github/workflows/e2e.yml"
 nvidia_workflow="${repo_root}/.github/workflows/e2e-nvidia.yml"
+release_workflow="${repo_root}/.github/workflows/release.yml"
 if ! grep -Fq 'make verify-e2e-serving-cpu-evidence K8S_MINOR=${{ matrix.kubernetes }}' "${kind_workflow}" ||
   ! grep -Fq 'name: M2 CPU/Kind acceptance' "${kind_workflow}" ||
   ! grep -Fq 'make verify-e2e-serving-cpu-evidence K8S_MINOR=1.36' "${e2e_workflow}"; then
@@ -275,10 +276,19 @@ if ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES ?= ${cuda_architectures}" "${repo_root
   echo "CUDA architecture coverage does not keep full release builds and bounded PR validation" >&2
   exit 1
 fi
+release_publish_timeout="$(awk '
+  $0 == "  publish:" { in_publish = 1; next }
+  in_publish && $0 ~ /^  [[:alnum:]_-]+:$/ { exit }
+  in_publish && $1 == "timeout-minutes:" { print $2; exit }
+' "${release_workflow}")"
+if [[ "${release_publish_timeout}" != "360" ]]; then
+  echo "release publish timeout must be 360 minutes for the full CUDA architecture build" >&2
+  exit 1
+fi
 if ! grep -Fq 'RUNTIME_CPU_PLATFORMS ?= linux/amd64,linux/arm64' "${repo_root}/Makefile" ||
   ! grep -Fq 'RUNTIME_CUDA_PLATFORMS ?= linux/amd64' "${repo_root}/Makefile" ||
-  ! grep -Fq 'platforms: linux/amd64,linux/arm64' "${repo_root}/.github/workflows/release.yml" ||
-  ! grep -Fq 'platforms: linux/amd64' "${repo_root}/.github/workflows/release.yml"; then
+  ! grep -Fq 'platforms: linux/amd64,linux/arm64' "${release_workflow}" ||
+  ! grep -Fq 'platforms: linux/amd64' "${release_workflow}"; then
   echo "runtime Buildx architecture matrices do not match the M2 contract" >&2
   exit 1
 fi

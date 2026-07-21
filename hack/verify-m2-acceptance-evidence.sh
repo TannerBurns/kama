@@ -102,8 +102,12 @@ verify_cpu() {
     direct-request.json
     direct-request-job.json
     direct-request.log
+    recovery-request.json
+    recovery-request-job.json
+    recovery-request.log
     delayed-loading.json
     drain.json
+    artifact-transition.json
     load-failure.json
     supervisor-state.json
     modeldeployments.json
@@ -183,8 +187,30 @@ verify_cpu() {
     (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
     (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and
     (.serviceDNS | type == "string" and endswith(".kama-system.svc")) and
+    .serviceUID == $serviceUID and .job == "e2e-serving-cpu-client" and
     .clientImageManifestDigest == $digest
-  ' --arg digest "$(jq -r '.images.servingClient.manifestDigest' "${evidence_dir}/identities.json")"
+  ' --arg digest "$(jq -r '.images.servingClient.manifestDigest' "${evidence_dir}/identities.json")" \
+    --arg serviceUID "$(jq -r '.service.uid' "${evidence_dir}/serving-contract.json")"
+  assert_json recovery-request.log "complete post-recovery CPU SSE response" '
+    .schemaVersion == 1 and .sseDataEvents > 0 and
+    (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+    (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and .done == true
+  '
+  assert_json recovery-request.json "post-recovery request uses the original ClusterIP Service" '
+    .transport == "in-cluster ClusterIP Service DNS" and
+    .route == "/v1/chat/completions" and .stream == true and .completed == true and
+    .generatedContentObserved == true and .job == "e2e-serving-cpu-recovered" and
+    (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+    (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and
+    (.serviceDNS | type == "string" and endswith(".kama-system.svc")) and
+    .serviceUID == $serviceUID and .clientImageManifestDigest == $digest
+  ' --arg digest "$(jq -r '.images.servingClient.manifestDigest' "${evidence_dir}/identities.json")" \
+    --arg serviceUID "$(jq -r '.service.uid' "${evidence_dir}/serving-contract.json")"
+  assert_json recovery-request-job.json "post-recovery request Job identity and completion" '
+    .metadata.name == $job and (.metadata.uid | type == "string" and length > 0) and
+    .status.succeeded == 1 and
+    any(.status.conditions[]; .type == "Complete" and .status == "True")
+  ' --arg job "$(jq -r '.job' "${evidence_dir}/recovery-request.json")"
   assert_json delayed-loading.json "delayed readiness without endpoint publication or restart" '
     .childTemporarilyStopped == true and .supervisorAliveWhileLoading == true and
     .runtimeReadyWhileLoading == false and .readyEndpointWhileLoading == false and
@@ -201,6 +227,76 @@ verify_cpu() {
     (.oldPodUID | type == "string" and length > 0) and
     (.newPodUID | type == "string" and length > 0) and .oldPodUID != .newPodUID
   '
+  assert_json artifact-transition.json "changed artifact identity drains and recovery resumes" '
+    def unavailable_observation:
+      .deployments.observedCount == (.deployments.items | length) and
+      .deployments.observedCount == 0 and
+      .pods.observedCount == (.pods.items | length) and
+      .pods.observedCount == 0 and
+      .endpointSlices.observedCount == (.endpointSlices.items | length) and
+      .endpointSlices.readyEndpointCount ==
+        ([.endpointSlices.items[].endpoints[]? | select(.ready == true)] | length) and
+      .endpointSlices.readyEndpointCount == 0 and
+      .service.name == $serviceName and .service.uid == $serviceUID and
+      (.modelDeployment.uid | type == "string" and length > 0) and
+      .modelDeployment.modelRef == "e2e-serving-transition-unready" and
+      (.modelDeployment.status.desiredReplicas // 0) == 0 and
+      (.modelDeployment.status.readyReplicas // 0) == 0 and
+      .modelDeployment.status.deploymentRef == null and .modelDeployment.status.runtime == null and
+      .modelDeployment.status.artifact.name == "e2e-serving-transition-unready" and
+      any(.modelDeployment.status.conditions[];
+        .type == "ArtifactReady" and .status == "False") and
+      any(.modelDeployment.status.conditions[]; .type == "Serving" and .status == "False");
+    .changedReference.existingArtifactReady == false and
+    .changedReference.oldArtifact.name == "e2e-serving-model" and
+    .changedReference.oldArtifact.uid == $artifactUID and
+    .changedReference.oldArtifact.digest == $modelDigest and
+    .changedReference.requestedArtifact.name == "e2e-serving-transition-unready" and
+    (.changedReference.requestedArtifact.uid | type == "string" and length > 0) and
+    .changedReference.oldArtifact.uid != .changedReference.requestedArtifact.uid and
+    any(.changedReference.requestedArtifact.status.conditions[]?;
+      .type == "Ready" and .status == "False") and
+    (.drain.observationSeconds | type == "number" and . >= 10) and
+    (.drain.stabilityChecks | type == "number" and . >= 2) and
+    ([.drain.unavailableObservation, .drain.stabilityRecheck] |
+      all(.[]; unavailable_observation)) and
+    .drain.unavailableObservation.modelDeployment.status.artifact.uid ==
+      .changedReference.requestedArtifact.uid and
+    .drain.stabilityRecheck.modelDeployment.status.artifact.uid ==
+      .changedReference.requestedArtifact.uid and
+    .recovery.originalReferenceRestored == true and
+    .recovery.originalArtifactIdentityRestored == true and
+    .recovery.serviceIdentityPreserved == true and
+    .recovery.service == $serviceName and .recovery.serviceUID == $serviceUID and
+    .recovery.requestJob == $recoveryJob and
+    .recovery.oldPodUID == $drainPodUID and
+    (.recovery.newPodUID | type == "string" and length > 0) and
+    .recovery.oldPodUID != .recovery.newPodUID and
+    .recovery.observedPod.uid == .recovery.newPodUID and
+    .recovery.observedPod.phase == "Running" and
+    any(.recovery.observedPod.containers[];
+      .name == "runtime" and .ready == true and .restartCount == 0) and
+    .recovery.endpointSlices.observedCount ==
+      (.recovery.endpointSlices.items | length) and
+    .recovery.endpointSlices.readyEndpointCount ==
+      ([.recovery.endpointSlices.items[].endpoints[]? | select(.ready == true)] | length) and
+    .recovery.endpointSlices.readyEndpointCount > 0 and
+    (.recovery | .newPodUID as $newPodUID |
+      any(.endpointSlices.items[].endpoints[]?;
+        .ready == true and .targetRef.uid == $newPodUID)) and
+    .recovery.status.artifact.name == "e2e-serving-model" and
+    .recovery.status.artifact.uid == .changedReference.oldArtifact.uid and
+    .recovery.status.artifact.digest == $modelDigest and
+    .recovery.status.desiredReplicas == 1 and .recovery.status.readyReplicas == 1 and
+    .recovery.status.runtime.state == "Ready" and
+    any(.recovery.status.conditions[]; .type == "ArtifactReady" and .status == "True") and
+    any(.recovery.status.conditions[]; .type == "Serving" and .status == "True")
+  ' --arg modelDigest "${model_digest}" \
+    --arg artifactUID "$(jq -r '.artifactUID' "${evidence_dir}/serving-contract.json")" \
+    --arg serviceName "$(jq -r '.service.name' "${evidence_dir}/serving-contract.json")" \
+    --arg serviceUID "$(jq -r '.service.uid' "${evidence_dir}/serving-contract.json")" \
+    --arg drainPodUID "$(jq -r '.newPodUID' "${evidence_dir}/drain.json")" \
+    --arg recoveryJob "$(jq -r '.job' "${evidence_dir}/recovery-request.json")"
   assert_json load-failure.json "stable terminal failure without restart or endpoint" '
     .supervisorRunning == true and .restartCount == 0 and .readyEndpoint == false and
     .stableObservation == true and (.pod | type == "string" and length > 0)

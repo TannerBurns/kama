@@ -246,6 +246,269 @@ func TestRuntimeFingerprintChangesForEveryMutableInputDomain(t *testing.T) {
 	}
 }
 
+func TestLoadedWorkloadPreservationRequiresExactArtifactIdentityAndLocation(t *testing.T) {
+	t.Parallel()
+	scheme := testScheme(t)
+	modelDeployment, artifact, _ := readyServingObjects(kamav1alpha1.ModelDeploymentPlacementCPU)
+	reconciler := testModelDeploymentReconciler(nil, scheme)
+	fingerprint, locationHash, _, image, err := reconciler.desiredRuntime(modelDeployment, artifact)
+	if err != nil {
+		t.Fatalf("desiredRuntime(): %v", err)
+	}
+	modelDeployment.Status.ObservedGeneration = modelDeployment.Generation
+	modelDeployment.Status.Artifact = &kamav1alpha1.ModelDeploymentArtifactStatus{
+		Name: artifact.Name, UID: artifact.UID, Digest: artifact.Status.ArtifactDigest,
+	}
+	modelDeployment.Status.Runtime = &kamav1alpha1.ModelDeploymentRuntimeStatus{
+		DesiredImage: image, DesiredFingerprint: fingerprint, LoadedFingerprint: fingerprint,
+	}
+	workload := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
+			runtimeFingerprintAnnotation:   fingerprint,
+			artifactLocationHashAnnotation: locationHash,
+		}},
+	}}}
+	if !reconciler.canPreserveLoadedWorkload(modelDeployment, artifact, workload) {
+		t.Fatal("exact loaded artifact identity was not preservable")
+	}
+
+	tests := map[string]func(*kamav1alpha1.ModelDeployment, *kamav1alpha1.ModelArtifact){
+		"model reference": func(deployment *kamav1alpha1.ModelDeployment, _ *kamav1alpha1.ModelArtifact) {
+			deployment.Spec.ModelRef.Name = "replacement-model"
+		},
+		"artifact UID": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
+			artifact.UID = types.UID("replacement-artifact-uid")
+		},
+		"artifact digest": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
+			artifact.Status.ArtifactDigest = strings.Repeat("b", 64)
+			artifact.Status.Files[0].SHA256 = artifact.Status.ArtifactDigest
+		},
+		"location claim name": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
+			artifact.Status.Location.ClaimName = "replacement-claim"
+		},
+		"location claim UID": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
+			artifact.Status.Location.ClaimUID = types.UID("replacement-claim-uid")
+		},
+		"location subpath": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
+			artifact.Status.Location.SubPath = "artifacts/replacement"
+		},
+		"location volume UID": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
+			artifact.Status.Location.VolumeUID = types.UID("replacement-volume-uid")
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			deploymentCopy := modelDeployment.DeepCopy()
+			artifactCopy := artifact.DeepCopy()
+			mutate(deploymentCopy, artifactCopy)
+			if reconciler.canPreserveLoadedWorkload(deploymentCopy, artifactCopy, workload.DeepCopy()) {
+				t.Fatalf("loaded workload was preserved after %s changed", name)
+			}
+		})
+	}
+}
+
+func TestModelDeploymentReconcileDrainsLoadedWorkloadForChangedArtifactIdentity(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, client.Client, *kamav1alpha1.ModelDeployment, *kamav1alpha1.ModelArtifact) *kamav1alpha1.ModelArtifact
+	}{
+		{
+			name: "same reference replacement UID",
+			mutate: func(t *testing.T, kubeClient client.Client, _ *kamav1alpha1.ModelDeployment,
+				artifact *kamav1alpha1.ModelArtifact,
+			) *kamav1alpha1.ModelArtifact {
+				t.Helper()
+				if err := kubeClient.Delete(context.Background(), artifact); err != nil {
+					t.Fatalf("delete original ModelArtifact: %v", err)
+				}
+				replacement := artifact.DeepCopy()
+				replacement.ResourceVersion = ""
+				replacement.UID = types.UID("replacement-artifact-uid")
+				markTestArtifactUnavailable(replacement)
+				if err := kubeClient.Create(context.Background(), replacement); err != nil {
+					t.Fatalf("create replacement ModelArtifact: %v", err)
+				}
+				if err := kubeClient.Status().Update(context.Background(), replacement); err != nil {
+					t.Fatalf("publish replacement ModelArtifact status: %v", err)
+				}
+				return replacement
+			},
+		},
+		{
+			name: "same reference digest",
+			mutate: func(t *testing.T, kubeClient client.Client, _ *kamav1alpha1.ModelDeployment,
+				artifact *kamav1alpha1.ModelArtifact,
+			) *kamav1alpha1.ModelArtifact {
+				t.Helper()
+				var changed kamav1alpha1.ModelArtifact
+				if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(artifact), &changed); err != nil {
+					t.Fatalf("get ModelArtifact for digest change: %v", err)
+				}
+				changed.Status.ArtifactDigest = strings.Repeat("b", 64)
+				changed.Status.Files[0].SHA256 = changed.Status.ArtifactDigest
+				markTestArtifactUnavailable(&changed)
+				if err := kubeClient.Status().Update(context.Background(), &changed); err != nil {
+					t.Fatalf("publish changed digest: %v", err)
+				}
+				return &changed
+			},
+		},
+		{
+			name: "same reference location",
+			mutate: func(t *testing.T, kubeClient client.Client, _ *kamav1alpha1.ModelDeployment,
+				artifact *kamav1alpha1.ModelArtifact,
+			) *kamav1alpha1.ModelArtifact {
+				t.Helper()
+				var changed kamav1alpha1.ModelArtifact
+				if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(artifact), &changed); err != nil {
+					t.Fatalf("get ModelArtifact for location change: %v", err)
+				}
+				changed.Status.Location.SubPath = "artifacts/replacement"
+				markTestArtifactUnavailable(&changed)
+				if err := kubeClient.Status().Update(context.Background(), &changed); err != nil {
+					t.Fatalf("publish changed location: %v", err)
+				}
+				return &changed
+			},
+		},
+		{
+			name: "model reference",
+			mutate: func(t *testing.T, kubeClient client.Client, deployment *kamav1alpha1.ModelDeployment,
+				artifact *kamav1alpha1.ModelArtifact,
+			) *kamav1alpha1.ModelArtifact {
+				t.Helper()
+				replacement := artifact.DeepCopy()
+				replacement.Name = "replacement-model"
+				replacement.ResourceVersion = ""
+				replacement.UID = types.UID("replacement-artifact-uid")
+				markTestArtifactUnavailable(replacement)
+				if err := kubeClient.Create(context.Background(), replacement); err != nil {
+					t.Fatalf("create referenced replacement ModelArtifact: %v", err)
+				}
+				if err := kubeClient.Status().Update(context.Background(), replacement); err != nil {
+					t.Fatalf("publish referenced replacement status: %v", err)
+				}
+				var current kamav1alpha1.ModelDeployment
+				if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(deployment), &current); err != nil {
+					t.Fatalf("get ModelDeployment for reference change: %v", err)
+				}
+				current.Generation++
+				current.Spec.ModelRef.Name = replacement.Name
+				if err := kubeClient.Update(context.Background(), &current); err != nil {
+					t.Fatalf("change model reference: %v", err)
+				}
+				return replacement
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scheme := testScheme(t)
+			if err := appsv1.AddToScheme(scheme); err != nil {
+				t.Fatalf("add apps scheme: %v", err)
+			}
+			if err := discoveryv1.AddToScheme(scheme); err != nil {
+				t.Fatalf("add discovery scheme: %v", err)
+			}
+			modelDeployment, artifact, claim := readyServingObjects(kamav1alpha1.ModelDeploymentPlacementCPU)
+			kubeClient := fake.NewClientBuilder().WithScheme(scheme).
+				WithStatusSubresource(&kamav1alpha1.ModelDeployment{}, &kamav1alpha1.ModelArtifact{}).
+				WithObjects(modelDeployment, artifact, claim).Build()
+			reconciler := testModelDeploymentReconciler(kubeClient, scheme)
+			request := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(modelDeployment)}
+			if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("initial Reconcile(): %v", err)
+			}
+
+			var workload appsv1.Deployment
+			if err := kubeClient.Get(context.Background(), types.NamespacedName{
+				Namespace: modelDeployment.Namespace, Name: servingObjectName(modelDeployment),
+			}, &workload); err != nil {
+				t.Fatalf("get initial workload: %v", err)
+			}
+			fingerprint := workload.Spec.Template.Annotations[runtimeFingerprintAnnotation]
+			if fingerprint == "" {
+				t.Fatal("initial workload has no runtime fingerprint")
+			}
+			var loaded kamav1alpha1.ModelDeployment
+			if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &loaded); err != nil {
+				t.Fatalf("get ModelDeployment checkpoint: %v", err)
+			}
+			loaded.Status.ObservedGeneration = loaded.Generation
+			loaded.Status.DesiredReplicas = 1
+			loaded.Status.ReadyReplicas = 1
+			loaded.Status.Artifact = &kamav1alpha1.ModelDeploymentArtifactStatus{
+				Name: artifact.Name, UID: artifact.UID, Digest: artifact.Status.ArtifactDigest,
+			}
+			loaded.Status.Runtime = &kamav1alpha1.ModelDeploymentRuntimeStatus{
+				DesiredImage:       testRuntimeCPUImage,
+				DesiredFingerprint: fingerprint,
+				LoadedFingerprint:  fingerprint,
+			}
+			loaded.Status.DeploymentRef = &kamav1alpha1.ModelDeploymentObjectReference{
+				Name: workload.Name, UID: workload.UID,
+			}
+			if err := kubeClient.Status().Update(context.Background(), &loaded); err != nil {
+				t.Fatalf("publish loaded checkpoint: %v", err)
+			}
+
+			selectedArtifact := test.mutate(t, kubeClient, modelDeployment, artifact)
+			if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("identity-change Reconcile(): %v", err)
+			}
+			var remaining appsv1.Deployment
+			err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(&workload), &remaining)
+			if err == nil && remaining.DeletionTimestamp.IsZero() {
+				t.Fatal("loaded workload remained active after artifact identity changed")
+			}
+			if err != nil && !apierrors.IsNotFound(err) {
+				t.Fatalf("get drained workload: %v", err)
+			}
+
+			if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+				t.Fatalf("blocked replacement Reconcile(): %v", err)
+			}
+			var workloads appsv1.DeploymentList
+			if err := kubeClient.List(context.Background(), &workloads,
+				client.InNamespace(modelDeployment.Namespace),
+				client.MatchingLabels{modelDeploymentUIDLabel: string(modelDeployment.UID)}); err != nil {
+				t.Fatalf("list blocked replacement workloads: %v", err)
+			}
+			for index := range workloads.Items {
+				if workloads.Items[index].DeletionTimestamp.IsZero() {
+					t.Fatalf("replacement workload became active: %+v", workloads.Items[index])
+				}
+			}
+
+			var current kamav1alpha1.ModelDeployment
+			if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &current); err != nil {
+				t.Fatalf("get blocked ModelDeployment status: %v", err)
+			}
+			artifactCondition := meta.FindStatusCondition(current.Status.Conditions,
+				kamav1alpha1.ModelDeploymentConditionArtifactReady)
+			resourceCondition := meta.FindStatusCondition(current.Status.Conditions,
+				kamav1alpha1.ModelDeploymentConditionResourcesAvailable)
+			if current.Status.ObservedGeneration != current.Generation ||
+				current.Status.DesiredReplicas != 0 || current.Status.ReadyReplicas != 0 ||
+				current.Status.DeploymentRef != nil || current.Status.Runtime != nil ||
+				current.Status.ServiceRef == nil || current.Status.Artifact == nil ||
+				current.Status.Artifact.Name != selectedArtifact.Name ||
+				current.Status.Artifact.UID != selectedArtifact.UID ||
+				current.Status.Artifact.Digest != selectedArtifact.Status.ArtifactDigest ||
+				artifactCondition == nil || artifactCondition.Status != metav1.ConditionFalse ||
+				resourceCondition == nil || resourceCondition.Status != metav1.ConditionFalse ||
+				resourceCondition.Reason != "WaitingForArtifact" ||
+				meta.IsStatusConditionTrue(current.Status.Conditions,
+					kamav1alpha1.ModelDeploymentConditionServing) {
+				t.Fatalf("blocked identity-change status = %+v", current.Status)
+			}
+		})
+	}
+}
+
 func TestModelDeploymentNotReadyArtifactCreatesOnlyService(t *testing.T) {
 	t.Parallel()
 	scheme := testScheme(t)
@@ -668,7 +931,7 @@ func TestModelDeploymentPreservesLoadedWorkloadThroughTransientArtifactLoss(t *t
 		t.Fatalf("create ready EndpointSlice: %v", err)
 	}
 	fingerprint := workload.Spec.Template.Annotations[runtimeFingerprintAnnotation]
-	reconciler.HTTPClient = &http.Client{Transport: roundTripperFunc(func(request *http.Request) (*http.Response, error) {
+	healthyRuntimeTransport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
 		body := `{"phase":"Ready","reason":"RuntimeReady","message":"llama-server is ready",` +
 			`"ready":true,"deployment":{"uid":"deployment-uid","fingerprint":"` + fingerprint + `"},` +
 			`"runtime":{"mode":"CPU","effectiveContextTokens":4096,"desiredConcurrency":1,` +
@@ -677,7 +940,8 @@ func TestModelDeploymentPreservesLoadedWorkloadThroughTransientArtifactLoss(t *t
 			StatusCode: http.StatusOK, Header: make(http.Header),
 			Body: io.NopCloser(strings.NewReader(body)), Request: request,
 		}, nil
-	})}
+	})
+	reconciler.HTTPClient = &http.Client{Transport: healthyRuntimeTransport}
 	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
 		t.Fatalf("ready Reconcile(): %v", err)
 	}
@@ -690,7 +954,8 @@ func TestModelDeploymentPreservesLoadedWorkloadThroughTransientArtifactLoss(t *t
 		loadedDeployment.Status.Runtime.ObservedFingerprint != fingerprint ||
 		loadedDeployment.Status.Runtime.LlamaCommit != testLlamaCommit ||
 		loadedDeployment.Status.Runtime.AcceleratorDetected == nil ||
-		*loadedDeployment.Status.Runtime.AcceleratorDetected {
+		*loadedDeployment.Status.Runtime.AcceleratorDetected ||
+		!meta.IsStatusConditionTrue(loadedDeployment.Status.Conditions, kamav1alpha1.ModelDeploymentConditionServing) {
 		t.Fatalf("loaded runtime checkpoint = %+v", loadedDeployment.Status.Runtime)
 	}
 	changedDeployment := loadedDeployment.DeepCopy()
@@ -722,6 +987,7 @@ func TestModelDeploymentPreservesLoadedWorkloadThroughTransientArtifactLoss(t *t
 		loadedDeployment.Status.Runtime.AcceleratorDetected != nil {
 		t.Fatalf("diagnostics outage erased loaded checkpoint: %+v", loadedDeployment.Status.Runtime)
 	}
+	reconciler.HTTPClient = &http.Client{Transport: healthyRuntimeTransport}
 	var currentArtifact kamav1alpha1.ModelArtifact
 	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(artifact), &currentArtifact); err != nil {
 		t.Fatalf("get artifact: %v", err)
@@ -745,7 +1011,7 @@ func TestModelDeploymentPreservesLoadedWorkloadThroughTransientArtifactLoss(t *t
 	}
 	artifactCondition := meta.FindStatusCondition(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionArtifactReady)
 	if artifactCondition == nil || artifactCondition.Status != metav1.ConditionFalse ||
-		meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionServing) {
+		!meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionServing) {
 		t.Fatalf("conditions after outage = %+v", updated.Status.Conditions)
 	}
 	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(&workload), &workload); err != nil {
@@ -759,6 +1025,39 @@ func TestModelDeploymentPreservesLoadedWorkloadThroughTransientArtifactLoss(t *t
 	}
 	if !hasArtifactUnavailableSchedulingGate(replicaSet.Spec.Template.Spec.SchedulingGates) {
 		t.Fatal("ReplicaSet replacement Pods were not scheduling-gated during the artifact outage")
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(endpointSlice), endpointSlice); err != nil {
+		t.Fatalf("get ready EndpointSlice during outage: %v", err)
+	}
+	endpointReady := false
+	endpointSlice.Endpoints[0].Conditions.Ready = &endpointReady
+	if err := kubeClient.Update(context.Background(), endpointSlice); err != nil {
+		t.Fatalf("make preserved endpoint unready: %v", err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("unready endpoint Reconcile(): %v", err)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &updated); err != nil {
+		t.Fatalf("get ModelDeployment with unready endpoint: %v", err)
+	}
+	if meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionServing) ||
+		meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionArtifactReady) {
+		t.Fatalf("unready preserved endpoint conditions = %+v", updated.Status.Conditions)
+	}
+	endpointReady = true
+	endpointSlice.Endpoints[0].Conditions.Ready = &endpointReady
+	if err := kubeClient.Update(context.Background(), endpointSlice); err != nil {
+		t.Fatalf("restore preserved endpoint readiness: %v", err)
+	}
+	if _, err := reconciler.Reconcile(context.Background(), request); err != nil {
+		t.Fatalf("restored endpoint Reconcile(): %v", err)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &updated); err != nil {
+		t.Fatalf("get ModelDeployment with restored endpoint: %v", err)
+	}
+	if !meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionServing) ||
+		meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelDeploymentConditionArtifactReady) {
+		t.Fatalf("restored preserved endpoint conditions = %+v", updated.Status.Conditions)
 	}
 	if err := kubeClient.Delete(context.Background(), pod); err != nil {
 		t.Fatalf("delete loaded Pod during outage: %v", err)
@@ -1240,6 +1539,16 @@ func readyServingObjects(mode kamav1alpha1.ModelDeploymentPlacementMode) (
 		},
 	}
 	return modelDeployment, artifact, claim
+}
+
+func markTestArtifactUnavailable(artifact *kamav1alpha1.ModelArtifact) {
+	meta.SetStatusCondition(&artifact.Status.Conditions, metav1.Condition{
+		Type:               kamav1alpha1.ModelArtifactConditionReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: artifact.Generation,
+		Reason:             "CacheProbeFailed",
+		Message:            "artifact is temporarily unavailable",
+	})
 }
 
 func testModelDeploymentReconciler(kubeClient client.Client, scheme *runtime.Scheme) *ModelDeploymentReconciler {

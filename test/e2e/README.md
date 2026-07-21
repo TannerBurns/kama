@@ -84,8 +84,15 @@ make verify-e2e-serving-nvidia-evidence
 
 The targets validate the complete retained evidence set, including qualification,
 source/image identity, Kubernetes version, status/object identity, readiness,
-streaming, failure, drain, restart, redaction, and mode-specific runtime facts. A
-suite exit code alone is therefore insufficient to satisfy an M2 acceptance gate.
+streaming, failure, drain, restart, redaction, and mode-specific runtime facts. The
+CPU suite also changes an already-serving deployment to a different, existing but
+not-ready artifact identity, proves the old workload and endpoint remain absent,
+then restores the original identity and requires inference from a new Pod behind the
+same Service. It retains separate pre-transition and post-recovery request records,
+including `direct-request.{log,json}`, `direct-request-job.json`,
+`recovery-request.{log,json}`, and `recovery-request-job.json`, plus Kubernetes
+object summaries immediately after drain and at the stability recheck. A suite exit
+code alone is therefore insufficient to satisfy an M2 acceptance gate.
 
 ## Suite contract
 

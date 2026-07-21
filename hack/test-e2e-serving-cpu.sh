@@ -84,9 +84,13 @@ evidence_is_complete() {
     direct-request.log
     direct-request.json
     direct-request-job.json
+    recovery-request.log
+    recovery-request.json
+    recovery-request-job.json
     supervisor-state.json
     delayed-loading.json
     drain.json
+    artifact-transition.json
     load-failure.json
   )
   local required_json_files=(
@@ -100,9 +104,13 @@ evidence_is_complete() {
     serving-contract.json
     direct-request.json
     direct-request-job.json
+    recovery-request.log
+    recovery-request.json
+    recovery-request-job.json
     supervisor-state.json
     delayed-loading.json
     drain.json
+    artifact-transition.json
     load-failure.json
   )
   for required_file in "${required_files[@]}"; do
@@ -134,6 +142,24 @@ evidence_is_complete() {
     ' \
       "${evidence_dir}/direct-request.json" >/dev/null ||
     ! jq -e '
+      .schemaVersion == 1 and .sseDataEvents > 0 and .done == true and
+      (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+      (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0
+    ' "${evidence_dir}/recovery-request.log" >/dev/null ||
+    ! jq -e --arg serviceUID "$(jq -r '.service.uid // empty' \
+      "${evidence_dir}/serving-contract.json")" '
+      .job == "e2e-serving-cpu-recovered" and
+      .serviceUID == $serviceUID and
+      .completed == true and .stream == true and .generatedContentObserved == true and
+      (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
+      (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0
+    ' "${evidence_dir}/recovery-request.json" >/dev/null ||
+    ! jq -e --arg job "$(jq -r '.job // empty' \
+      "${evidence_dir}/recovery-request.json")" '
+      .metadata.name == $job and .status.succeeded == 1 and
+      any(.status.conditions[]; .type == "Complete" and .status == "True")
+    ' "${evidence_dir}/recovery-request-job.json" >/dev/null ||
+    ! jq -e '
       .supervisorAliveWhileLoading == true and .runtimeReadyWhileLoading == false and
       .readyEndpointWhileLoading == false and .eventuallyRuntimeReady == true and
       .eventuallyReadyEndpoint == true and .restartCount == 0
@@ -145,6 +171,64 @@ evidence_is_complete() {
       (.elapsedSeconds | type) == "number" and .elapsedSeconds <= .drainTimeoutSeconds and
       .oldPodUID != "" and .newPodUID != "" and .oldPodUID != .newPodUID
     ' "${evidence_dir}/drain.json" >/dev/null ||
+    ! jq -e \
+      --arg drainPodUID "$(jq -r '.newPodUID // empty' "${evidence_dir}/drain.json")" \
+      --arg artifactUID "$(jq -r '.artifactUID // empty' "${evidence_dir}/serving-contract.json")" \
+      --arg serviceUID "$(jq -r '.service.uid // empty' "${evidence_dir}/serving-contract.json")" \
+      --arg recoveryJob "$(jq -r '.job // empty' "${evidence_dir}/recovery-request.json")" '
+      def unavailable_observation:
+        .deployments.observedCount == (.deployments.items | length) and
+        .deployments.observedCount == 0 and
+        .pods.observedCount == (.pods.items | length) and
+        .pods.observedCount == 0 and
+        .endpointSlices.observedCount == (.endpointSlices.items | length) and
+        .endpointSlices.readyEndpointCount ==
+          ([.endpointSlices.items[].endpoints[]? | select(.ready == true)] | length) and
+        .endpointSlices.readyEndpointCount == 0 and
+        .service.uid == $serviceUID and
+        .modelDeployment.modelRef == "e2e-serving-transition-unready" and
+        (.modelDeployment.status.desiredReplicas // 0) == 0 and
+        (.modelDeployment.status.readyReplicas // 0) == 0 and
+        .modelDeployment.status.deploymentRef == null and
+        .modelDeployment.status.runtime == null and
+        any(.modelDeployment.status.conditions[];
+          .type == "ArtifactReady" and .status == "False") and
+        any(.modelDeployment.status.conditions[]; .type == "Serving" and .status == "False");
+      .changedReference.existingArtifactReady == false and
+      .changedReference.oldArtifact.name == "e2e-serving-model" and
+      .changedReference.oldArtifact.uid == $artifactUID and
+      .changedReference.oldArtifact.digest != "" and
+      .changedReference.requestedArtifact.name == "e2e-serving-transition-unready" and
+      .changedReference.requestedArtifact.uid != "" and
+      any(.changedReference.requestedArtifact.status.conditions[]?;
+        .type == "Ready" and .status == "False") and
+      .drain.observationSeconds >= 10 and
+      .drain.stabilityChecks >= 2 and
+      ([.drain.unavailableObservation, .drain.stabilityRecheck] |
+        all(.[]; unavailable_observation)) and
+      .drain.unavailableObservation.modelDeployment.status.artifact.uid ==
+        .changedReference.requestedArtifact.uid and
+      .drain.stabilityRecheck.modelDeployment.status.artifact.uid ==
+        .changedReference.requestedArtifact.uid and
+      .recovery.originalReferenceRestored == true and
+      .recovery.originalArtifactIdentityRestored == true and
+      .recovery.serviceIdentityPreserved == true and
+      .recovery.serviceUID == $serviceUID and .recovery.requestJob == $recoveryJob and
+      .recovery.oldPodUID == $drainPodUID and .recovery.newPodUID != "" and
+      .recovery.observedPod.uid == .recovery.newPodUID and
+      .recovery.observedPod.phase == "Running" and
+      any(.recovery.observedPod.containers[];
+        .name == "runtime" and .ready == true and .restartCount == 0) and
+      .recovery.endpointSlices.observedCount ==
+        (.recovery.endpointSlices.items | length) and
+      .recovery.endpointSlices.readyEndpointCount ==
+        ([.recovery.endpointSlices.items[].endpoints[]? | select(.ready == true)] | length) and
+      .recovery.endpointSlices.readyEndpointCount > 0 and
+      (.recovery | .newPodUID as $newPodUID |
+        any(.endpointSlices.items[].endpoints[]?;
+          .ready == true and .targetRef.uid == $newPodUID)) and
+      .recovery.oldPodUID != .recovery.newPodUID
+    ' "${evidence_dir}/artifact-transition.json" >/dev/null ||
     ! jq -e '
       .supervisorRunning == true and .restartCount == 0 and .readyEndpoint == false and
       .stableObservation == true and .pod != "" and .podUID != ""
@@ -383,10 +467,15 @@ run_in_cluster_serving_client() {
   local job_name=$1
   local service_name=$2
   local model_name=$3
+  local evidence_basename=${4:-direct-request}
   local manifest="${tmp_dir}/${job_name}.yaml"
+  local request_log="${evidence_dir}/${evidence_basename}.log"
+  local request_json="${evidence_dir}/${evidence_basename}.json"
+  local request_job_json="${evidence_dir}/${evidence_basename}-job.json"
   local completed=0
   local generated_content_fragments=0
   local generated_content_bytes=0
+  local service_uid
 
   sed \
     -e "s|KAMA_SERVING_CLIENT_NAME|${job_name}|g" \
@@ -402,29 +491,34 @@ run_in_cluster_serving_client() {
     completed=1
   fi
   "${kubectl_bin}" -n "${namespace}" logs "job/${job_name}" --container client \
-    >"${evidence_dir}/direct-request.log" 2>&1 || true
+    >"${request_log}" 2>&1 || true
   "${kubectl_bin}" -n "${namespace}" get job "${job_name}" -o json | jq '{
     metadata: {name: .metadata.name, uid: .metadata.uid},
     spec: {activeDeadlineSeconds: .spec.activeDeadlineSeconds, backoffLimit: .spec.backoffLimit},
     status: .status
-  }' >"${evidence_dir}/direct-request-job.json" 2>/dev/null || true
+  }' >"${request_job_json}" 2>/dev/null || true
   if [[ ${completed} -ne 1 ]] || ! jq -e \
     '.schemaVersion == 1 and .sseDataEvents > 0 and
      (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
      (.generatedContentBytes | type) == "number" and .generatedContentBytes > 0 and .done == true' \
-    "${evidence_dir}/direct-request.log" >/dev/null 2>&1; then
+    "${request_log}" >/dev/null 2>&1; then
     echo "in-cluster CPU serving client did not observe generated content in a complete SSE response" >&2
     return 1
   fi
-  generated_content_fragments="$(jq -r '.generatedContentFragments' \
-    "${evidence_dir}/direct-request.log")"
-  generated_content_bytes="$(jq -r '.generatedContentBytes' \
-    "${evidence_dir}/direct-request.log")"
+  generated_content_fragments="$(jq -r '.generatedContentFragments' "${request_log}")"
+  generated_content_bytes="$(jq -r '.generatedContentBytes' "${request_log}")"
+  service_uid="$("${kubectl_bin}" -n "${namespace}" get service "${service_name}" \
+    -o jsonpath='{.metadata.uid}')"
+  if [[ -z "${service_uid}" ]]; then
+    echo "in-cluster CPU serving client could not resolve the serving Service UID" >&2
+    return 1
+  fi
   jq -n \
     --arg image "${fixtures_image}" \
     --arg imageDigest "${fixtures_manifest_digest}" \
     --arg job "${job_name}" \
     --arg serviceDNS "${service_name}.${namespace}.svc" \
+    --arg serviceUID "${service_uid}" \
     --argjson generatedContentFragments "${generated_content_fragments}" \
     --argjson generatedContentBytes "${generated_content_bytes}" '{
       transport: "in-cluster ClusterIP Service DNS",
@@ -437,8 +531,89 @@ run_in_cluster_serving_client() {
       clientImage: $image,
       clientImageManifestDigest: $imageDigest,
       job: $job,
-      serviceDNS: $serviceDNS
-    }' >"${evidence_dir}/direct-request.json"
+      serviceDNS: $serviceDNS,
+      serviceUID: $serviceUID
+    }' >"${request_json}"
+}
+
+summarize_artifact_transition_observation() {
+  local model_deployment_json=$1
+  local deployments_json=$2
+  local pods_json=$3
+  local endpoint_slices_json=$4
+  local service_json=$5
+  jq -n \
+    --argjson modelDeployment "${model_deployment_json}" \
+    --argjson deployments "${deployments_json}" \
+    --argjson pods "${pods_json}" \
+    --argjson endpointSlices "${endpoint_slices_json}" \
+    --argjson service "${service_json}" '{
+      modelDeployment: {
+        name: $modelDeployment.metadata.name,
+        uid: $modelDeployment.metadata.uid,
+        generation: $modelDeployment.metadata.generation,
+        modelRef: $modelDeployment.spec.modelRef.name,
+        status: $modelDeployment.status
+      },
+      deployments: {
+        observedCount: ($deployments.items | length),
+        items: [$deployments.items[] | {
+          name: .metadata.name,
+          uid: .metadata.uid,
+          deletionTimestamp: (.metadata.deletionTimestamp // null)
+        }]
+      },
+      pods: {
+        observedCount: ($pods.items | length),
+        items: [$pods.items[] | {
+          name: .metadata.name,
+          uid: .metadata.uid,
+          phase: .status.phase,
+          deletionTimestamp: (.metadata.deletionTimestamp // null),
+          containers: [.status.containerStatuses[]? | {name, ready, restartCount}]
+        }]
+      },
+      endpointSlices: {
+        observedCount: ($endpointSlices.items | length),
+        readyEndpointCount: ([$endpointSlices.items[].endpoints[]? |
+          select(.conditions.ready == true)] | length),
+        items: [$endpointSlices.items[] | {
+          name: .metadata.name,
+          uid: .metadata.uid,
+          endpoints: [.endpoints[]? | {
+            addresses,
+            ready: (.conditions.ready // null),
+            targetRef: ((.targetRef // {}) | {kind, name, uid})
+          }]
+        }]
+      },
+      service: {name: $service.metadata.name, uid: $service.metadata.uid}
+    }'
+}
+
+artifact_transition_unavailable_state_is_valid() {
+  local model_deployment_json=$1
+  local artifact_json=$2
+  local deployments_json=$3
+  local pods_json=$4
+  local endpoint_slices_json=$5
+  local observed_service_uid=$6
+  local expected_service_uid=$7
+  jq -e '
+    .status.observedGeneration == .metadata.generation and
+    .spec.modelRef.name == "e2e-serving-transition-unready" and
+    (.status.desiredReplicas // 0) == 0 and (.status.readyReplicas // 0) == 0 and
+    .status.deploymentRef == null and .status.runtime == null and
+    any(.status.conditions[]; .type == "ArtifactReady" and .status == "False") and
+    any(.status.conditions[]; .type == "Serving" and .status == "False")
+  ' <<<"${model_deployment_json}" >/dev/null || return 1
+  jq -e 'any(.status.conditions[]?; .type == "Ready" and .status == "False")' \
+    <<<"${artifact_json}" >/dev/null || return 1
+  jq -e '(.items | length) == 0' <<<"${deployments_json}" >/dev/null || return 1
+  jq -e '(.items | length) == 0' <<<"${pods_json}" >/dev/null || return 1
+  ! jq -e 'any(.items[].endpoints[]?; .conditions.ready == true)' \
+    <<<"${endpoint_slices_json}" >/dev/null || return 1
+  [[ "${observed_service_uid}" == "${expected_service_uid}" ]]
 }
 
 if "${kind_bin}" get clusters | grep -Fxq "${cluster_name}"; then
@@ -1145,6 +1320,293 @@ jq -n \
   oldPodUID: $oldPodUID,
   newPodUID: $newPodUID
 }' >"${evidence_dir}/drain.json"
+
+# A changed model reference is a changed artifact identity, even when the new
+# object has not become usable. The loaded Pod must not be preserved in this
+# case: drain it, keep the stable Service empty, and do not create a replacement
+# until the original verified identity is selected again.
+transition_old_artifact_json="$("${kubectl_bin}" -n "${namespace}" get modelartifact \
+  e2e-serving-model -o json)"
+transition_old_artifact_uid="$(jq -r '.metadata.uid // empty' <<<"${transition_old_artifact_json}")"
+transition_old_artifact_digest="$(jq -r '.status.artifactDigest // empty' \
+  <<<"${transition_old_artifact_json}")"
+transition_old_pod_json="$("${kubectl_bin}" -n "${namespace}" get pods \
+  -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu \
+  -o json | jq '[.items[] | select(.status.phase == "Running")][0]')"
+transition_old_pod_name="$(jq -r '.metadata.name // empty' <<<"${transition_old_pod_json}")"
+transition_old_pod_uid="$(jq -r '.metadata.uid // empty' <<<"${transition_old_pod_json}")"
+transition_service_uid="$("${kubectl_bin}" -n "${namespace}" get service "${service_name}" \
+  -o jsonpath='{.metadata.uid}')"
+if [[ -z "${transition_old_artifact_uid}" || -z "${transition_old_artifact_digest}" ||
+  -z "${transition_old_pod_name}" || -z "${transition_old_pod_uid}" ||
+  -z "${transition_service_uid}" ]]; then
+  echo "artifact-transition baseline identity is incomplete" >&2
+  exit 1
+fi
+
+"${kubectl_bin}" -n "${namespace}" apply -f - <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: e2e-serving-transition-unready
+spec:
+  format: GGUF
+  entrypoint: smollm2-360m-instruct-q8_0.gguf
+  cacheRef:
+    name: e2e-serving-transition-cache-that-does-not-exist
+  verification:
+    expectedSHA256: 48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201
+    expectedSize: 386404992
+  source:
+    huggingFace:
+      repository: HuggingFaceTB/SmolLM2-360M-Instruct-GGUF
+      revision: 593b5a2e04c8f3e4ee880263f93e0bd2901ad47f
+      files:
+        - smollm2-360m-instruct-q8_0.gguf
+EOF
+transition_artifact_json=""
+for _ in $(seq 1 120); do
+  transition_artifact_json="$("${kubectl_bin}" -n "${namespace}" get modelartifact \
+    e2e-serving-transition-unready -o json 2>/dev/null || true)"
+  if [[ -n "${transition_artifact_json}" ]] && jq -e '
+    .status.observedGeneration == .metadata.generation and
+    any(.status.conditions[]?; .type == "Ready" and .status == "False")
+  ' <<<"${transition_artifact_json}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+transition_artifact_uid="$(jq -r '.metadata.uid // empty' <<<"${transition_artifact_json:-null}")"
+if [[ -z "${transition_artifact_uid}" ]] || ! jq -e '
+  .status.observedGeneration == .metadata.generation and
+  any(.status.conditions[]?; .type == "Ready" and .status == "False")
+' <<<"${transition_artifact_json:-null}" >/dev/null; then
+  echo "replacement ModelArtifact did not reach a stable not-ready state" >&2
+  exit 1
+fi
+
+"${kubectl_bin}" -n "${namespace}" patch modeldeployment e2e-serving-cpu --type=merge \
+  -p '{"spec":{"modelRef":{"name":"e2e-serving-transition-unready"}}}'
+wait_for_modeldeployment e2e-serving-cpu \
+  '.status.observedGeneration == .metadata.generation and
+   .status.artifact.name == "e2e-serving-transition-unready" and
+   .status.artifact.uid == "'"${transition_artifact_uid}"'" and
+   (.status.desiredReplicas // 0) == 0 and (.status.readyReplicas // 0) == 0 and
+   .status.deploymentRef == null and .status.runtime == null and
+   ([.status.conditions[] | select(.type == "ArtifactReady" and .status == "False")] | length) == 1 and
+   ([.status.conditions[] | select(.type == "Serving" and .status == "False")] | length) == 1' \
+  'the changed artifact identity to block serving and drain the loaded workload'
+transition_drained=0
+for _ in $(seq 1 180); do
+  transition_workloads_json="$("${kubectl_bin}" -n "${namespace}" get deployments \
+    -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu -o json)"
+  transition_pods_json="$("${kubectl_bin}" -n "${namespace}" get pods \
+    -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu -o json)"
+  transition_endpoints_json="$("${kubectl_bin}" -n "${namespace}" get endpointslice \
+    -l "kubernetes.io/service-name=${service_name}" -o json)"
+  if jq -e '(.items | length) == 0' <<<"${transition_workloads_json}" >/dev/null &&
+    jq -e '(.items | length) == 0' <<<"${transition_pods_json}" >/dev/null &&
+    ! jq -e 'any(.items[].endpoints[]?; .conditions.ready == true)' \
+      <<<"${transition_endpoints_json}" >/dev/null; then
+    transition_drained=1
+    break
+  fi
+  sleep 1
+done
+if [[ ${transition_drained} -ne 1 ]]; then
+  echo "changed artifact identity did not fully drain the old serving workload and endpoint" >&2
+  exit 1
+fi
+transition_unavailable_deployment_json="$("${kubectl_bin}" -n "${namespace}" get modeldeployment \
+  e2e-serving-cpu -o json)"
+transition_unavailable_service_json="$("${kubectl_bin}" -n "${namespace}" get service \
+  "${service_name}" -o json)"
+transition_unavailable_observation="$(summarize_artifact_transition_observation \
+  "${transition_unavailable_deployment_json}" \
+  "${transition_workloads_json}" \
+  "${transition_pods_json}" \
+  "${transition_endpoints_json}" \
+  "${transition_unavailable_service_json}")"
+
+transition_stability_seconds=10
+transition_observation_started=${SECONDS}
+transition_stable=1
+transition_stability_checks=0
+while ((SECONDS - transition_observation_started < transition_stability_seconds)); do
+  transition_deployment_json="$("${kubectl_bin}" -n "${namespace}" get modeldeployment \
+    e2e-serving-cpu -o json)"
+  transition_artifact_json="$("${kubectl_bin}" -n "${namespace}" get modelartifact \
+    e2e-serving-transition-unready -o json)"
+  transition_workloads_json="$("${kubectl_bin}" -n "${namespace}" get deployments \
+    -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu -o json)"
+  transition_pods_json="$("${kubectl_bin}" -n "${namespace}" get pods \
+    -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu -o json)"
+  transition_endpoints_json="$("${kubectl_bin}" -n "${namespace}" get endpointslice \
+    -l "kubernetes.io/service-name=${service_name}" -o json)"
+  current_service_uid="$("${kubectl_bin}" -n "${namespace}" get service "${service_name}" \
+    -o jsonpath='{.metadata.uid}')"
+  ((transition_stability_checks += 1))
+  if ! artifact_transition_unavailable_state_is_valid \
+    "${transition_deployment_json}" \
+    "${transition_artifact_json}" \
+    "${transition_workloads_json}" \
+    "${transition_pods_json}" \
+    "${transition_endpoints_json}" \
+    "${current_service_uid}" \
+    "${transition_service_uid}"; then
+    transition_stable=0
+    break
+  fi
+  sleep 1
+done
+if [[ ${transition_stable} -ne 1 ]]; then
+  echo "changed artifact identity created a replacement workload, endpoint, or unstable status" >&2
+  exit 1
+fi
+transition_deployment_json="$("${kubectl_bin}" -n "${namespace}" get modeldeployment \
+  e2e-serving-cpu -o json)"
+transition_artifact_json="$("${kubectl_bin}" -n "${namespace}" get modelartifact \
+  e2e-serving-transition-unready -o json)"
+transition_workloads_json="$("${kubectl_bin}" -n "${namespace}" get deployments \
+  -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu -o json)"
+transition_pods_json="$("${kubectl_bin}" -n "${namespace}" get pods \
+  -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu -o json)"
+transition_endpoints_json="$("${kubectl_bin}" -n "${namespace}" get endpointslice \
+  -l "kubernetes.io/service-name=${service_name}" -o json)"
+transition_stability_service_json="$("${kubectl_bin}" -n "${namespace}" get service \
+  "${service_name}" -o json)"
+current_service_uid="$(jq -r '.metadata.uid // empty' <<<"${transition_stability_service_json}")"
+((transition_stability_checks += 1))
+if ! artifact_transition_unavailable_state_is_valid \
+  "${transition_deployment_json}" \
+  "${transition_artifact_json}" \
+  "${transition_workloads_json}" \
+  "${transition_pods_json}" \
+  "${transition_endpoints_json}" \
+  "${current_service_uid}" \
+  "${transition_service_uid}"; then
+  echo "changed artifact identity did not remain unavailable at the final stability recheck" >&2
+  exit 1
+fi
+transition_observation_elapsed=$((SECONDS - transition_observation_started))
+transition_stability_observation="$(summarize_artifact_transition_observation \
+  "${transition_deployment_json}" \
+  "${transition_workloads_json}" \
+  "${transition_pods_json}" \
+  "${transition_endpoints_json}" \
+  "${transition_stability_service_json}")"
+
+"${kubectl_bin}" -n "${namespace}" patch modeldeployment e2e-serving-cpu --type=merge \
+  -p '{"spec":{"modelRef":{"name":"e2e-serving-model"}}}'
+wait_for_modeldeployment e2e-serving-cpu \
+  '.status.observedGeneration == .metadata.generation and
+   .status.artifact.name == "e2e-serving-model" and
+   .status.artifact.uid == "'"${transition_old_artifact_uid}"'" and
+   .status.artifact.digest == "'"${transition_old_artifact_digest}"'" and
+   .status.desiredReplicas == 1 and .status.readyReplicas == 1 and
+   .status.runtime.state == "Ready" and
+   ([.status.conditions[] | select(.type == "ArtifactReady" and .status == "True")] | length) == 1 and
+   ([.status.conditions[] | select(.type == "Serving" and .status == "True")] | length) == 1' \
+  'the original artifact identity to recover serving'
+transition_recovery_status="$("${kubectl_bin}" -n "${namespace}" get modeldeployment \
+  e2e-serving-cpu -o json | jq '.status')"
+transition_new_pod_json="$("${kubectl_bin}" -n "${namespace}" get pods \
+  -l kama.tannerburns.github.io/model-deployment=e2e-serving-cpu \
+  -o json | jq '[.items[] | select(.status.phase == "Running")][0]')"
+transition_new_pod_uid="$(jq -r '.metadata.uid // empty' <<<"${transition_new_pod_json}")"
+transition_recovered_service_uid="$("${kubectl_bin}" -n "${namespace}" get service "${service_name}" \
+  -o jsonpath='{.metadata.uid}')"
+transition_recovered_endpoints="$("${kubectl_bin}" -n "${namespace}" get endpointslice \
+  -l "kubernetes.io/service-name=${service_name}" -o json)"
+if [[ -z "${transition_new_pod_uid}" || "${transition_new_pod_uid}" == "${transition_old_pod_uid}" ||
+  "${transition_recovered_service_uid}" != "${transition_service_uid}" ]] ||
+  ! jq -e 'any(.items[].endpoints[]?; .conditions.ready == true)' \
+    <<<"${transition_recovered_endpoints}" >/dev/null; then
+  echo "original artifact recovery did not create a new ready Pod behind the stable Service" >&2
+  exit 1
+fi
+if [[ "${transition_old_pod_uid}" != "${new_pod_uid}" ||
+  "${transition_old_artifact_uid}" != "${artifact_uid}" ]]; then
+  echo "artifact-transition baseline does not match the previously recorded serving contract and drain" >&2
+  exit 1
+fi
+run_in_cluster_serving_client e2e-serving-cpu-recovered \
+  "${service_name}" e2e-serving-cpu recovery-request
+recovery_request_job="$(jq -r '.job // empty' "${evidence_dir}/recovery-request.json")"
+recovery_request_service_uid="$(jq -r '.serviceUID // empty' \
+  "${evidence_dir}/recovery-request.json")"
+if [[ "${recovery_request_job}" != "e2e-serving-cpu-recovered" ||
+  "${recovery_request_service_uid}" != "${transition_service_uid}" ]]; then
+  echo "recovery inference evidence does not identify the stable Service and recovery Job" >&2
+  exit 1
+fi
+
+jq -n \
+  --arg oldArtifactName "e2e-serving-model" \
+  --arg oldArtifactUID "${transition_old_artifact_uid}" \
+  --arg oldArtifactDigest "${transition_old_artifact_digest}" \
+  --arg requestedArtifactName "e2e-serving-transition-unready" \
+  --arg requestedArtifactUID "${transition_artifact_uid}" \
+  --arg service "${service_name}" \
+  --arg serviceUID "${transition_service_uid}" \
+  --arg oldPodUID "${transition_old_pod_uid}" \
+  --arg newPodUID "${transition_new_pod_uid}" \
+  --arg recoveryRequestJob "${recovery_request_job}" \
+  --argjson observationSeconds "${transition_observation_elapsed}" \
+  --argjson stabilityChecks "${transition_stability_checks}" \
+  --argjson requestedArtifactStatus "$(jq '.status' <<<"${transition_artifact_json}")" \
+  --argjson unavailableObservation "${transition_unavailable_observation}" \
+  --argjson stabilityObservation "${transition_stability_observation}" \
+  --argjson recoveryPod "${transition_new_pod_json}" \
+  --argjson recoveryEndpointSlices "${transition_recovered_endpoints}" \
+  --argjson recoveryStatus "${transition_recovery_status}" '{
+  changedReference: {
+    existingArtifactReady: false,
+    oldArtifact: {name: $oldArtifactName, uid: $oldArtifactUID, digest: $oldArtifactDigest},
+    requestedArtifact: {
+      name: $requestedArtifactName,
+      uid: $requestedArtifactUID,
+      status: $requestedArtifactStatus
+    }
+  },
+  drain: {
+    observationSeconds: $observationSeconds,
+    stabilityChecks: $stabilityChecks,
+    unavailableObservation: $unavailableObservation,
+    stabilityRecheck: $stabilityObservation
+  },
+  recovery: {
+    originalReferenceRestored: true,
+    originalArtifactIdentityRestored: true,
+    serviceIdentityPreserved: true,
+    service: $service,
+    serviceUID: $serviceUID,
+    requestJob: $recoveryRequestJob,
+    oldPodUID: $oldPodUID,
+    newPodUID: $newPodUID,
+    observedPod: {
+      name: $recoveryPod.metadata.name,
+      uid: $recoveryPod.metadata.uid,
+      phase: $recoveryPod.status.phase,
+      containers: [$recoveryPod.status.containerStatuses[]? | {name, ready, restartCount}]
+    },
+    endpointSlices: {
+      observedCount: ($recoveryEndpointSlices.items | length),
+      readyEndpointCount: ([$recoveryEndpointSlices.items[].endpoints[]? |
+        select(.conditions.ready == true)] | length),
+      items: [$recoveryEndpointSlices.items[] | {
+        name: .metadata.name,
+        uid: .metadata.uid,
+        endpoints: [.endpoints[]? | {
+          addresses,
+          ready: (.conditions.ready // null),
+          targetRef: ((.targetRef // {}) | {kind, name, uid})
+        }]
+      }]
+    },
+    status: $recoveryStatus
+  }
+}' >"${evidence_dir}/artifact-transition.json"
 
 artifact_subpath="$("${kubectl_bin}" -n "${namespace}" get modelartifact e2e-serving-model \
   -o jsonpath='{.status.location.subPath}')"
