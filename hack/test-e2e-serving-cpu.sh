@@ -68,6 +68,7 @@ fi
 
 evidence_is_complete() {
   local required_file
+  local required_json_file
   local required_files=(
     identities.json
     local-images.json
@@ -88,9 +89,31 @@ evidence_is_complete() {
     drain.json
     load-failure.json
   )
+  local required_json_files=(
+    identities.json
+    local-images.json
+    kubernetes-version.json
+    modeldeployments.json
+    endpointslices.json
+    runtime-pods.json
+    artifact-gating.json
+    serving-contract.json
+    direct-request.json
+    direct-request-job.json
+    supervisor-state.json
+    delayed-loading.json
+    drain.json
+    load-failure.json
+  )
   for required_file in "${required_files[@]}"; do
     if [[ ! -s "${evidence_dir}/${required_file}" ]]; then
       echo "CPU acceptance evidence is missing or empty: ${required_file}" >&2
+      return 1
+    fi
+  done
+  for required_json_file in "${required_json_files[@]}"; do
+    if ! jq empty "${evidence_dir}/${required_json_file}" >/dev/null 2>&1; then
+      echo "CPU acceptance evidence is not valid JSON: ${required_json_file}" >&2
       return 1
     fi
   done
@@ -188,7 +211,8 @@ capture_evidence() {
     jq '[.[] | {id: .Id, repoDigests: .RepoDigests, labels: .Config.Labels}]' \
       >"${evidence_dir}/local-images.json" || true
   if [[ ${cluster_created} -eq 1 ]]; then
-    "${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" 2>&1 || true
+    "${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" \
+      2>"${evidence_dir}/kubernetes-version.stderr" || true
     "${kubectl_bin}" get nodes -o wide >"${evidence_dir}/nodes.txt" 2>&1 || true
     "${kubectl_bin}" -n "${namespace}" get modelartifact,modeldeployment,deploy,svc,job,pod \
       -o wide >"${evidence_dir}/resources.txt" 2>&1 || true
@@ -521,7 +545,8 @@ fi
 "${kind_bin}" create cluster --name "${cluster_name}" --image "${node_image}" \
   --config "${repo_root}/test/kind/cluster.yaml" --wait 5m
 cluster_created=1
-"${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json"
+"${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" \
+  2>"${evidence_dir}/kubernetes-version.stderr"
 server_git_version="$(jq -r '.serverVersion.gitVersion // empty' \
   "${evidence_dir}/kubernetes-version.json")"
 if [[ "${server_git_version}" != "v${expected_k8s_minor}."* ]]; then

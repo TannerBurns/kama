@@ -147,6 +147,14 @@ if ! grep -Fq 'runs-on: [self-hosted, Linux, X64, kama-nvidia]' "${nvidia_workfl
 fi
 
 nvidia_suite="${repo_root}/hack/test-e2e-serving-nvidia.sh"
+cpu_suite="${repo_root}/hack/test-e2e-serving-cpu.sh"
+for serving_suite in "${cpu_suite}" "${nvidia_suite}"; do
+  if grep -Fq 'kubernetes-version.json" 2>&1' "${serving_suite}" ||
+    ! grep -Fq '2>"${evidence_dir}/kubernetes-version.stderr"' "${serving_suite}"; then
+    echo "${serving_suite} must keep kubectl warnings out of Kubernetes JSON evidence" >&2
+    exit 1
+  fi
+done
 for contract in \
   'verify_supply_chain()' \
   '"${cosign_bin}" verify' \

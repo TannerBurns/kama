@@ -260,7 +260,8 @@ capture_evidence() {
         expectedObservedManifestDigest: $runtimeCUDAObservedDigest
       }
     }' >"${evidence_dir}/identities.json"
-  "${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" 2>&1 || true
+  "${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" \
+    2>"${evidence_dir}/kubernetes-version.stderr" || true
   "${kubectl_bin}" get nodes -o json | jq '{
     items: [.items[] | {
       name: .metadata.name,
@@ -785,7 +786,8 @@ verify_supply_chain() {
 verify_image_provenance
 verify_supply_chain
 
-"${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json"
+"${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" \
+  2>"${evidence_dir}/kubernetes-version.stderr"
 server_major="$(jq -r '.serverVersion.major // empty' "${evidence_dir}/kubernetes-version.json")"
 server_minor="$(jq -r '.serverVersion.minor // empty | sub("[+]$"; "")' \
   "${evidence_dir}/kubernetes-version.json")"
