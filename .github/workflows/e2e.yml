@@ -60,6 +60,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Go
@@ -132,5 +133,47 @@ jobs:
         with:
           name: e2e-huggingface-${{ github.run_id }}-${{ github.run_attempt }}
           path: dist/e2e/huggingface/
+          if-no-files-found: error
+          retention-days: 90
+
+  cpu-serving:
+    name: Baseline serving / Kubernetes 1.36 / CPU runtime
+    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      KIND_CLUSTER: kama-e2e-serving-cpu-${{ github.run_id }}-${{ github.run_attempt }}
+      KIND_NODE_IMAGE: kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5
+      E2E_EVIDENCE_DIR: dist/e2e/serving-cpu
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned Kind and Helm
+        run: make kind helm
+
+      - name: Run production CPU serving suite
+        run: make test-e2e-serving-cpu K8S_MINOR=1.36
+
+      - name: Verify complete qualifying CPU evidence
+        env:
+          CPU_E2E_EVIDENCE_DIR: dist/e2e/serving-cpu
+          E2E_EXPECTED_COMMIT: ${{ github.sha }}
+        run: make verify-e2e-serving-cpu-evidence K8S_MINOR=1.36
+
+      - name: Upload CPU serving evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-serving-cpu-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2e/serving-cpu/
           if-no-files-found: error
           retention-days: 90

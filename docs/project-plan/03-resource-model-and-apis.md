@@ -84,49 +84,68 @@ is not part of the serving contract.
 spec:
   modelRef:
     name: llama-3-8b-q4
-  route:
-    modelAliases: [llama-3]
+  placement:
+    mode: Accelerator       # CPU or Accelerator in M2
+    acceleratorResource: nvidia.com/gpu
   runtime:
     maxContextTokens: 8192
     desiredConcurrency: 4
+    drainTimeout: 10m
     kvCache:
       keyType: f16
       valueType: f16
-  optimization:
-    policy: Balanced       # Balanced, Throughput, Latency
-  placement:
-    mode: Auto
-    acceleratorResource: nvidia.com/gpu
-    maxGPUsPerReplica: auto
-    allowHybridFallback: true
-    allowCPUFallback: true
-  autoscaling:
-    minReplicas: 0
-    maxReplicas: auto
-    idleCooldown: 10m
-    coldStartTimeout: 10m
+    expert:
+      batchSize: 2048
+      microBatchSize: 512
+      flashAttention: Auto
+  resources:
+    requests:
+      cpu: "4"
+      memory: 16Gi
+    limits:
+      memory: 24Gi
 ```
 
-The user declares the runtime envelope. Kama derives per-replica slots, replica count,
-GPU count, split settings, CPU/RAM requests, and ordered fallback pools. Requested
-context, concurrency, and KV precision are hard constraints.
+M2 is an intentionally fixed serving slice. Placement is explicit `CPU` or
+`Accelerator`; accelerator mode admits one full `nvidia.com/gpu`, and the controller
+owns that resource request/limit. CPU and memory requests plus a memory limit are
+required; a CPU limit is optional. Omitted context selects the model-advertised
+native context and requires concurrency one. An explicit context is per request, and
+Kama derives the exact total context for the declared concurrency. Context,
+concurrency, KV precision, and expert values are hard constraints.
+
+M3 adds `Auto`, hybrid/multi-GPU resolution, fitting, and profiling. M4 adds aliases,
+routes, and multiple replicas. M5 adds autoscaling and ordered fallback. Those fields
+are not admitted by the M2 schema.
 
 ### Guarded expert overrides
 
-Expert fields may tune supported llama.cpp batching, thread, and sampling defaults,
+Expert fields may tune supported llama.cpp batching, thread, and flash-attention defaults,
 but admission rejects flags that override artifact paths, HTTP binding, metrics and
 slot endpoints, GPU visibility/count, split settings, RPC workers, or health probes.
 The adapter schema is versioned against the pinned llama.cpp build.
 
+The conventional `args`, `env`, `image`, `ports`, `paths`, `probes`, `topology`, and
+`replicas` keys are reserved as always-invalid schema tombstones at the deployment and
+runtime levels. Kubernetes otherwise prunes undeclared custom-resource fields before a
+typed admission webhook can inspect them when field validation is not strict; reserving
+these keys makes the protected-field contract fail closed during CRD-first upgrades too.
+
 ### Status responsibilities
 
-- Artifact digest and runtime/llama.cpp fingerprint.
-- Estimated weight, KV, scratch, VRAM, and RAM requirements.
-- Ordered candidate profiles and the active resolved topology.
-- Generated serving pools and KEDA resources.
-- Ready/desired replicas, usable slots, queued requests, and route state.
-- `ArtifactReady`, `Profiled`, `TopologyResolved`, `ResourcesAvailable`, `Serving`,
-  `Degraded`, `AutoscalingReady`, and `FitFailed` conditions.
+- Artifact name, UID, digest, desired/observed runtime image, llama.cpp commit,
+  desired/observed fingerprint, and a durable loaded-fingerprint checkpoint. The
+  checkpoint proves that identity loaded previously; it never substitutes for a
+  current readiness observation.
+- Effective context/concurrency plus bounded accelerator/offloaded-layer facts.
+- Generated Deployment and stable Service references and ready/desired replicas.
+- `ArtifactReady`, `ResourcesAvailable`, `RuntimeReady`, `Serving`, and `Degraded`
+  conditions. Requested CPU mode always reports `Degraded=True` with
+  `CPUOnlyRequested` independently of serving readiness.
+
+The M3-M5 resources extend status with estimates, profiles, resolved topology,
+routes, usable capacity, queues, and autoscaling state without changing the meaning
+of these baseline fields.
 
 ## `ModelProfile`
 

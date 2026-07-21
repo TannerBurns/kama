@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -35,14 +36,17 @@ import (
 	"github.com/TannerBurns/kama/internal/artifact"
 	artifactcontroller "github.com/TannerBurns/kama/internal/controller"
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	eventsv1 "k8s.io/api/events/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -64,6 +68,9 @@ const (
 	artifactUIDLabel         = "kama.tannerburns.github.io/model-artifact-uid"
 	componentLabel           = "app.kubernetes.io/component"
 	artifactCleanupComponent = "artifact-cleanup"
+	modelDeploymentUIDLabel  = "kama.tannerburns.github.io/model-deployment-uid"
+	runtimeFingerprintKey    = "kama.tannerburns.github.io/runtime-fingerprint-full"
+	artifactSchedulingGate   = "kama.tannerburns.github.io/artifact-ready"
 )
 
 type resultLogStore struct {
@@ -107,6 +114,7 @@ func TestPersistentArtifactPlane(t *testing.T) {
 	suite := newIntegrationSuite(t)
 
 	t.Run("admission defaults validates and freezes ready content", suite.testAdmission)
+	t.Run("model deployment admission gates workload and repairs service drift", suite.testModelDeploymentAdmissionAndGating)
 	t.Run("managed cache probes imports and retains storage", suite.testManagedCacheAndHubImport)
 	t.Run("adopted and delete retention policies preserve ownership", suite.testClaimRetention)
 	t.Run("direct artifact recovers across restart and reports affinity", suite.testDirectRestartAndSuccess)
@@ -282,11 +290,25 @@ func (s *integrationSuite) startManager(t *testing.T) {
 	).SetupWithManager(manager); err != nil {
 		t.Fatalf("register ModelArtifact controller: %v", err)
 	}
+	if err := artifactcontroller.NewModelDeploymentReconciler(
+		manager.GetClient(), manager.GetAPIReader(), manager.GetScheme(), manager.GetEventRecorder("modeldeployment-envtest"),
+		artifactcontroller.RuntimeOptions{
+			CPUImage:    "registry.invalid/kama-runtime-cpu:test",
+			CUDAImage:   "registry.invalid/kama-runtime-cuda:test",
+			PullPolicy:  corev1.PullNever,
+			LlamaCommit: "af6528e6df5d798f7f1363ec1141699be0f638e2",
+		},
+	).SetupWithManager(manager); err != nil {
+		t.Fatalf("register ModelDeployment controller: %v", err)
+	}
 	if err := kamav1alpha1.SetupModelCacheWebhookWithManager(manager); err != nil {
 		t.Fatalf("register ModelCache webhooks: %v", err)
 	}
 	if err := kamav1alpha1.SetupModelArtifactWebhookWithManager(manager); err != nil {
 		t.Fatalf("register ModelArtifact webhooks: %v", err)
+	}
+	if err := kamav1alpha1.SetupModelDeploymentWebhookWithManager(manager); err != nil {
+		t.Fatalf("register ModelDeployment webhooks: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -434,6 +456,124 @@ func (s *integrationSuite) testAdmission(t *testing.T) {
 	if err := s.apiClient.Update(context.Background(), mutated); err == nil {
 		t.Fatal("Ready artifact content mutation unexpectedly passed admission")
 	}
+}
+
+func (s *integrationSuite) testModelDeploymentAdmissionAndGating(t *testing.T) {
+	namespace := s.createNamespace(t, "serving")
+	deployment := &kamav1alpha1.ModelDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "missing-artifact", Namespace: namespace},
+		Spec: kamav1alpha1.ModelDeploymentSpec{
+			ModelRef: corev1.LocalObjectReference{Name: "not-created"},
+			Placement: kamav1alpha1.ModelDeploymentPlacementSpec{
+				Mode: kamav1alpha1.ModelDeploymentPlacementCPU,
+			},
+			Resources: kamav1alpha1.ModelDeploymentResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+			},
+		},
+	}
+	if err := s.apiClient.Create(context.Background(), deployment); err != nil {
+		t.Fatalf("create ModelDeployment: %v", err)
+	}
+	if deployment.Spec.Runtime.DesiredConcurrency == nil || *deployment.Spec.Runtime.DesiredConcurrency != 1 ||
+		deployment.Spec.Runtime.DrainTimeout == nil ||
+		deployment.Spec.Runtime.DrainTimeout.Duration != kamav1alpha1.DefaultModelDeploymentDrainTimeout ||
+		deployment.Spec.Runtime.KVCache.KeyType != kamav1alpha1.ModelDeploymentKVCacheF16 ||
+		deployment.Spec.Runtime.Expert.BatchSize == nil ||
+		*deployment.Spec.Runtime.Expert.BatchSize != kamav1alpha1.DefaultModelDeploymentBatchSize {
+		t.Fatalf("ModelDeployment admission defaults = %+v", deployment.Spec.Runtime)
+	}
+
+	invalid := deployment.DeepCopy()
+	invalid.ResourceVersion = ""
+	invalid.UID = ""
+	invalid.Name = "user-owned-gpu"
+	invalid.Spec.Resources.Requests[kamav1alpha1.DefaultAcceleratorResource] = resource.MustParse("1")
+	if err := s.apiClient.Create(context.Background(), invalid); err == nil {
+		t.Fatal("user-supplied accelerator resource unexpectedly passed admission")
+	}
+
+	protectedFields := []struct {
+		location string
+		name     string
+	}{
+		{"spec", "args"}, {"spec", "env"}, {"spec", "image"}, {"spec", "ports"},
+		{"spec", "paths"}, {"spec", "probes"}, {"spec", "topology"}, {"spec", "replicas"},
+		{"runtime", "args"}, {"runtime", "env"}, {"runtime", "image"}, {"runtime", "ports"},
+		{"runtime", "paths"}, {"runtime", "probes"}, {"runtime", "topology"}, {"runtime", "replicas"},
+	}
+	for _, validationMode := range []string{metav1.FieldValidationWarn, metav1.FieldValidationIgnore} {
+		for index, protected := range protectedFields {
+			name := fmt.Sprintf("forbidden-%s-%s-%d", protected.location, protected.name, index)
+			spec := map[string]any{
+				"modelRef":  map[string]any{"name": "not-created"},
+				"placement": map[string]any{"mode": "CPU"},
+				"resources": map[string]any{
+					"requests": map[string]any{"cpu": "1", "memory": "1Gi"},
+					"limits":   map[string]any{"memory": "2Gi"},
+				},
+			}
+			if protected.location == "runtime" {
+				spec["runtime"] = map[string]any{protected.name: map[string]any{}}
+			} else {
+				spec[protected.name] = map[string]any{}
+			}
+			object := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": kamav1alpha1.GroupVersion.String(),
+				"kind":       "ModelDeployment",
+				"metadata":   map[string]any{"name": name, "namespace": namespace},
+				"spec":       spec,
+			}}
+			err := s.apiClient.Create(context.Background(), object, client.FieldValidation(validationMode))
+			if err == nil {
+				t.Fatalf("%s.%s passed with fieldValidation=%s", protected.location, protected.name, validationMode)
+			}
+			if !apierrors.IsInvalid(err) {
+				t.Fatalf("%s.%s error with fieldValidation=%s = %v, want Invalid",
+					protected.location, protected.name, validationMode, err)
+			}
+		}
+	}
+
+	var serviceName string
+	eventually(t, "gate serving workload on the missing artifact", func() (bool, error) {
+		var current kamav1alpha1.ModelDeployment
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(deployment), &current); err != nil {
+			return false, err
+		}
+		condition := meta.FindStatusCondition(current.Status.Conditions,
+			kamav1alpha1.ModelDeploymentConditionArtifactReady)
+		if condition == nil || condition.Status != metav1.ConditionFalse || condition.Reason != "ArtifactNotFound" ||
+			current.Status.ServiceRef == nil {
+			return false, fmt.Errorf("current ModelDeployment status is %+v", current.Status)
+		}
+		serviceName = current.Status.ServiceRef.Name
+		var workloads appsv1.DeploymentList
+		if err := s.apiClient.List(context.Background(), &workloads, client.InNamespace(namespace)); err != nil {
+			return false, err
+		}
+		return len(workloads.Items) == 0, nil
+	})
+
+	var service corev1.Service
+	serviceKey := types.NamespacedName{Namespace: namespace, Name: serviceName}
+	if err := s.apiClient.Get(context.Background(), serviceKey, &service); err != nil {
+		t.Fatalf("get stable serving Service: %v", err)
+	}
+	service.Spec.Ports[0].Port = 9090
+	service.Spec.ExternalIPs = []string{"192.0.2.1"}
+	if err := s.apiClient.Update(context.Background(), &service); err != nil {
+		t.Fatalf("inject serving Service drift: %v", err)
+	}
+	eventually(t, "repair serving Service drift", func() (bool, error) {
+		if err := s.apiClient.Get(context.Background(), serviceKey, &service); err != nil {
+			return false, err
+		}
+		return service.Spec.Ports[0].Port == 8080 && len(service.Spec.ExternalIPs) == 0, nil
+	})
 }
 
 func (s *integrationSuite) testManagedCacheAndHubImport(t *testing.T) {
@@ -768,9 +908,7 @@ func (s *integrationSuite) testDirectRestartAndSuccess(t *testing.T) {
 		return false, fmt.Errorf("artifactUID=%s jobs=%d configs=%d lease=%s holder=%s labels=%v get=%v",
 			modelArtifact.UID, len(jobs), len(configs), currentLease.Name, holder, currentLease.Labels, leaseErr)
 	})
-	if err := s.apiClient.Delete(context.Background(), modelArtifact); err != nil {
-		t.Fatalf("delete Direct artifact: %v", err)
-	}
+	s.exerciseModelDeploymentLifecycle(t, modelArtifact)
 	waitForNotFound(t, s.apiClient, client.ObjectKeyFromObject(modelArtifact), &kamav1alpha1.ModelArtifact{})
 	eventually(t, "successful recovery record deletion", func() (bool, error) {
 		jobs, err := s.ownedJobs(modelArtifact.UID, namespace)
@@ -787,6 +925,282 @@ func (s *integrationSuite) testDirectRestartAndSuccess(t *testing.T) {
 	if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(claim), &retained); err != nil {
 		t.Fatalf("Direct source claim was not retained: %v", err)
 	}
+}
+
+//nolint:gocyclo // This exercises one complete real-API serving and finalizer lifecycle.
+func (s *integrationSuite) exerciseModelDeploymentLifecycle(
+	t *testing.T,
+	modelArtifact *kamav1alpha1.ModelArtifact,
+) {
+	t.Helper()
+	namespace := modelArtifact.Namespace
+	modelDeployment := &kamav1alpha1.ModelDeployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "envtest-serving", Namespace: namespace},
+		Spec: kamav1alpha1.ModelDeploymentSpec{
+			ModelRef: corev1.LocalObjectReference{Name: modelArtifact.Name},
+			Placement: kamav1alpha1.ModelDeploymentPlacementSpec{
+				Mode: kamav1alpha1.ModelDeploymentPlacementCPU,
+			},
+			Resources: kamav1alpha1.ModelDeploymentResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+			},
+		},
+	}
+	if err := s.apiClient.Create(context.Background(), modelDeployment); err != nil {
+		t.Fatalf("create ready-artifact ModelDeployment: %v", err)
+	}
+
+	var workload appsv1.Deployment
+	eventually(t, "create gated serving workload for ready artifact", func() (bool, error) {
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), modelDeployment); err != nil {
+			return false, err
+		}
+		if modelDeployment.Status.DeploymentRef == nil {
+			return false, nil
+		}
+		key := client.ObjectKey{Namespace: namespace, Name: modelDeployment.Status.DeploymentRef.Name}
+		if err := s.apiClient.Get(context.Background(), key, &workload); err != nil {
+			return false, client.IgnoreNotFound(err)
+		}
+		return workload.Spec.Replicas != nil && *workload.Spec.Replicas == 1 &&
+			workload.Spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType, nil
+	})
+	if workload.Spec.Template.Spec.SecurityContext == nil ||
+		workload.Spec.Template.Spec.SecurityContext.RunAsUser == nil ||
+		*workload.Spec.Template.Spec.SecurityContext.RunAsUser != 65532 ||
+		!containsSchedulingGate(workload.Spec.Template.Spec.SchedulingGates, artifactSchedulingGate) ||
+		workload.Spec.Template.Spec.Affinity == nil ||
+		workload.Spec.Template.Spec.Affinity.NodeAffinity == nil ||
+		len(workload.Spec.Template.Spec.Containers) != 1 ||
+		workload.Spec.Template.Spec.Containers[0].SecurityContext == nil ||
+		workload.Spec.Template.Spec.Containers[0].SecurityContext.ReadOnlyRootFilesystem == nil ||
+		!*workload.Spec.Template.Spec.Containers[0].SecurityContext.ReadOnlyRootFilesystem {
+		t.Fatalf("generated serving workload contract = %+v", workload.Spec.Template.Spec)
+	}
+
+	var configs corev1.ConfigMapList
+	if err := s.apiClient.List(context.Background(), &configs, client.InNamespace(namespace),
+		client.MatchingLabels{modelDeploymentUIDLabel: string(modelDeployment.UID)}); err != nil {
+		t.Fatalf("list runtime ConfigMaps: %v", err)
+	}
+	if len(configs.Items) != 1 || configs.Items[0].Immutable == nil || !*configs.Items[0].Immutable {
+		t.Fatalf("runtime ConfigMaps = %+v, want one immutable input", configs.Items)
+	}
+
+	controller := true
+	replicaSet := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "envtest-serving-rs", Namespace: namespace,
+			Labels: workload.Spec.Template.Labels,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "Deployment",
+				Name: workload.Name, UID: workload.UID, Controller: &controller,
+			}},
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Selector: workload.Spec.Selector.DeepCopy(), Template: *workload.Spec.Template.DeepCopy(),
+		},
+	}
+	if err := s.apiClient.Create(context.Background(), replicaSet); err != nil {
+		t.Fatalf("create serving ReplicaSet: %v", err)
+	}
+	servingPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "envtest-serving-pod", Namespace: namespace,
+			Labels: workload.Spec.Template.Labels, Annotations: workload.Spec.Template.Annotations,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: appsv1.SchemeGroupVersion.String(), Kind: "ReplicaSet",
+				Name: replicaSet.Name, UID: replicaSet.UID, Controller: &controller,
+			}},
+		},
+		Spec: *workload.Spec.Template.Spec.DeepCopy(),
+	}
+	if err := s.apiClient.Create(context.Background(), servingPod); err != nil {
+		t.Fatalf("create scheduling-gated serving Pod: %v", err)
+	}
+	eventually(t, "release only the current ready artifact Pod", func() (bool, error) {
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(servingPod), servingPod); err != nil {
+			return false, err
+		}
+		return !containsSchedulingGate(servingPod.Spec.SchedulingGates, artifactSchedulingGate), nil
+	})
+	if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(replicaSet), replicaSet); err != nil {
+		t.Fatalf("get serving ReplicaSet: %v", err)
+	}
+	if !containsSchedulingGate(replicaSet.Spec.Template.Spec.SchedulingGates, artifactSchedulingGate) {
+		t.Fatal("controller removed the permanent gate from the ReplicaSet template")
+	}
+
+	oldFingerprint := workload.Spec.Template.Annotations[runtimeFingerprintKey]
+	if oldFingerprint == "" {
+		t.Fatal("generated workload has no runtime fingerprint")
+	}
+	modelDeploymentUID := modelDeployment.UID
+	listener, err := net.Listen("tcp", "127.0.0.9:8081")
+	if err != nil {
+		t.Fatalf("listen for synthetic supervisor state: %v", err)
+	}
+	runtimeServer := &http.Server{
+		ReadHeaderTimeout: time.Second,
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.URL.Path != "/state" {
+				writer.WriteHeader(http.StatusNotFound)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(map[string]any{
+				"phase": "Ready", "reason": "RuntimeReady", "message": "runtime is ready", "ready": true,
+				"deployment": map[string]any{
+					"uid": modelDeploymentUID, "fingerprint": oldFingerprint,
+				},
+				"runtime": map[string]any{
+					"mode": "CPU", "effectiveContextTokens": 4096, "desiredConcurrency": 1,
+					"llamaCPPCommit": "af6528e6df5d798f7f1363ec1141699be0f638e2",
+				},
+			})
+		}),
+	}
+	go func() { _ = runtimeServer.Serve(listener) }()
+	defer func() { _ = runtimeServer.Close() }()
+	servingPod.Status.PodIP = "127.0.0.9"
+	servingPod.Status.Conditions = []corev1.PodCondition{
+		{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
+		{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+	}
+	servingPod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "runtime", Image: workload.Spec.Template.Spec.Containers[0].Image,
+		ImageID: "registry.invalid/kama-runtime-cpu@sha256:" + strings.Repeat("c", 64),
+	}}
+	if err := s.apiClient.Status().Update(context.Background(), servingPod); err != nil {
+		t.Fatalf("mark serving Pod ready: %v", err)
+	}
+	if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), modelDeployment); err != nil {
+		t.Fatalf("get ModelDeployment before EndpointSlice: %v", err)
+	}
+	if modelDeployment.Status.ServiceRef == nil {
+		t.Fatal("ModelDeployment has no stable Service reference")
+	}
+	ready := true
+	endpointSlice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "envtest-serving-endpoints", Namespace: namespace,
+			Labels: map[string]string{discoveryv1.LabelServiceName: modelDeployment.Status.ServiceRef.Name},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints: []discoveryv1.Endpoint{{
+			Addresses:  []string{"192.0.2.10"},
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+			TargetRef: &corev1.ObjectReference{
+				APIVersion: corev1.SchemeGroupVersion.String(), Kind: "Pod", Namespace: namespace,
+				Name: servingPod.Name, UID: servingPod.UID,
+			},
+		}},
+	}
+	if err := s.apiClient.Create(context.Background(), endpointSlice); err != nil {
+		t.Fatalf("create ready serving EndpointSlice: %v", err)
+	}
+	eventually(t, "publish current fingerprint only through a ready endpoint", func() (bool, error) {
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), modelDeployment); err != nil {
+			return false, err
+		}
+		return meta.IsStatusConditionTrue(modelDeployment.Status.Conditions,
+			kamav1alpha1.ModelDeploymentConditionRuntimeReady) &&
+			meta.IsStatusConditionTrue(modelDeployment.Status.Conditions,
+				kamav1alpha1.ModelDeploymentConditionServing) &&
+			modelDeployment.Status.Runtime != nil &&
+			modelDeployment.Status.Runtime.LoadedFingerprint == oldFingerprint, nil
+	})
+	shutdownContext, shutdownCancel := context.WithTimeout(context.Background(), time.Second)
+	_ = runtimeServer.Shutdown(shutdownContext)
+	shutdownCancel()
+	eventually(t, "update mutable ModelDeployment", func() (bool, error) {
+		var current kamav1alpha1.ModelDeployment
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &current); err != nil {
+			return false, err
+		}
+		current.Spec.Resources.Limits[corev1.ResourceMemory] = resource.MustParse("3Gi")
+		if err := s.apiClient.Update(context.Background(), &current); err != nil {
+			if apierrors.IsConflict(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		*modelDeployment = current
+		return true, nil
+	})
+	eventually(t, "apply drain-first fingerprinted Recreate update", func() (bool, error) {
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(&workload), &workload); err != nil {
+			return false, err
+		}
+		fingerprint := workload.Spec.Template.Annotations[runtimeFingerprintKey]
+		return fingerprint != "" && fingerprint != oldFingerprint &&
+			workload.Spec.Strategy.Type == appsv1.RecreateDeploymentStrategyType &&
+			containsSchedulingGate(workload.Spec.Template.Spec.SchedulingGates, artifactSchedulingGate), nil
+	})
+	eventually(t, "retain old and new immutable runtime configs while old Pod drains", func() (bool, error) {
+		configs = corev1.ConfigMapList{}
+		if err := s.apiClient.List(context.Background(), &configs, client.InNamespace(namespace),
+			client.MatchingLabels{modelDeploymentUIDLabel: string(modelDeployment.UID)}); err != nil {
+			return false, err
+		}
+		return len(configs.Items) == 2, nil
+	})
+
+	if err := s.apiClient.Delete(context.Background(), modelArtifact); err != nil {
+		t.Fatalf("delete referenced ModelArtifact: %v", err)
+	}
+	if err := s.apiClient.Delete(context.Background(), modelDeployment); err != nil {
+		t.Fatalf("delete referring ModelDeployment: %v", err)
+	}
+	eventually(t, "hold artifact through ModelDeployment drain finalization", func() (bool, error) {
+		var deletingArtifact kamav1alpha1.ModelArtifact
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(modelArtifact), &deletingArtifact); err != nil {
+			return false, err
+		}
+		var deletingDeployment kamav1alpha1.ModelDeployment
+		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &deletingDeployment); err != nil {
+			return false, err
+		}
+		return !deletingArtifact.DeletionTimestamp.IsZero() &&
+			!deletingDeployment.DeletionTimestamp.IsZero() &&
+			slices.Contains(deletingArtifact.Finalizers, kamav1alpha1.ModelArtifactFinalizer) &&
+			slices.Contains(deletingDeployment.Finalizers, kamav1alpha1.ModelDeploymentFinalizer), nil
+	})
+
+	_ = s.apiClient.Delete(context.Background(), servingPod)
+	_ = s.apiClient.Delete(context.Background(), replicaSet)
+	eventually(t, "complete foreground serving workload deletion in envtest", func() (bool, error) {
+		var deletingWorkload appsv1.Deployment
+		err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(&workload), &deletingWorkload)
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if deletingWorkload.DeletionTimestamp.IsZero() {
+			return false, nil
+		}
+		if slices.Contains(deletingWorkload.Finalizers, metav1.FinalizerDeleteDependents) {
+			deletingWorkload.Finalizers = slices.DeleteFunc(deletingWorkload.Finalizers, func(value string) bool {
+				return value == metav1.FinalizerDeleteDependents
+			})
+			if err := s.apiClient.Update(context.Background(), &deletingWorkload); err != nil && !apierrors.IsConflict(err) {
+				return false, err
+			}
+		}
+		return false, nil
+	})
+	waitForNotFound(t, s.apiClient, client.ObjectKeyFromObject(modelDeployment), &kamav1alpha1.ModelDeployment{})
+}
+
+func containsSchedulingGate(gates []corev1.PodSchedulingGate, name string) bool {
+	return slices.ContainsFunc(gates, func(gate corev1.PodSchedulingGate) bool {
+		return gate.Name == name
+	})
 }
 
 func (s *integrationSuite) testRetryFailureAndDeletion(t *testing.T) {

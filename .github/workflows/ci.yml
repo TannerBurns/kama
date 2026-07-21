@@ -80,13 +80,15 @@ jobs:
         run: make test-envtest
 
   packaging:
-    name: Images, chart, and SBOMs
+    name: Images, runtimes, chart, and SBOMs
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 90
     env:
       IMG: local/kama-manager:ci
       IMPORTER_IMG: local/kama-importer:ci
       FIXTURES_IMG: local/kama-test-fixtures:ci
+      RUNTIME_CPU_IMG: local/kama-runtime-cpu:ci
+      RUNTIME_CUDA_IMG: local/kama-runtime-cuda:ci
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -105,7 +107,7 @@ jobs:
       - name: Install pinned tools
         run: make helm
 
-      - name: Build manager, importer, and fixture images
+      - name: Build manager, importer, fixture, and runtime images
         run: make container
 
       - name: Package Helm chart

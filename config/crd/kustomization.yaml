@@ -17,3 +17,4 @@ kind: Kustomization
 resources:
 - bases/kama.tannerburns.github.io_modelartifacts.yaml
 - bases/kama.tannerburns.github.io_modelcaches.yaml
+- bases/kama.tannerburns.github.io_modeldeployments.yaml

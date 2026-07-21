@@ -46,6 +46,18 @@ var (
 		Name: "kama_model_artifact_size_bytes",
 		Help: "Aggregate verified size of a ModelArtifact.",
 	}, []string{metricNamespaceLabel, artifactName})
+	modelDeploymentReadyReplicas = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kama_model_deployment_ready_replicas",
+		Help: "Ready replicas serving the current ModelDeployment runtime fingerprint.",
+	}, []string{metricNamespaceLabel, modelDeploymentMetricLabel})
+	modelDeploymentRuntimeState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kama_model_deployment_runtime_state",
+		Help: "Current bounded runtime state for a ModelDeployment (exactly one state is 1).",
+	}, []string{metricNamespaceLabel, modelDeploymentMetricLabel, "state"})
+	modelDeploymentLoadFailures = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kama_model_deployment_load_failures_total",
+		Help: "Transitions to a terminal model runtime load failure.",
+	}, []string{metricReasonLabel})
 	artifactOperations = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kama_model_artifact_operations_total",
 		Help: "Completed artifact import or validation operations.",
@@ -86,6 +98,9 @@ func registerControllerMetrics() {
 			modelCacheFreeBytes,
 			modelArtifactReady,
 			modelArtifactSizeBytes,
+			modelDeploymentReadyReplicas,
+			modelDeploymentRuntimeState,
+			modelDeploymentLoadFailures,
 			artifactOperations,
 			artifactBytesTransferred,
 			artifactRetries,

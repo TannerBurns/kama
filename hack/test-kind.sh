@@ -16,9 +16,13 @@ namespace="kama-system"
 manager_image="${IMG:-local/kama-manager:${version}}"
 importer_image="${IMPORTER_IMG:-local/kama-importer:${version}}"
 fixtures_image="${FIXTURES_IMG:-local/kama-test-fixtures:${version}}"
+m1_fixture_commit="5ea80bc6745ddc99a0f70cbc537be95cd31638cb"
+m1_manager_image="local/kama-manager-m1:${version}"
+m1_importer_image="local/kama-importer-m1:${version}"
 created="$(git -C "${repo_root}" show -s --format=%cI HEAD 2>/dev/null || printf '1970-01-01T00:00:00Z')"
 revision="$(git -C "${repo_root}" rev-parse HEAD 2>/dev/null || printf 'unknown')"
 tmp_dir="$(mktemp -d)"
+m1_fixture_dir="${tmp_dir}/m1-fixture"
 cluster_created=0
 port_forward_pids=()
 
@@ -28,12 +32,22 @@ fi
 if [[ ! -x "${helm_bin}" ]]; then
   helm_bin="$(command -v helm || true)"
 fi
-for tool in "${kind_bin}" "${kubectl_bin}" "${helm_bin}" docker curl jq base64; do
+for tool in "${kind_bin}" "${kubectl_bin}" "${helm_bin}" docker curl jq base64 git tar; do
   if [[ -z "${tool}" ]] || ! command -v "${tool}" >/dev/null 2>&1; then
     echo "required command is unavailable: ${tool:-unset}" >&2
     exit 1
   fi
 done
+
+# The compatibility test starts from the last immutable pre-M2 repository
+# revision. Extracting that revision keeps the old chart and manager binary
+# independent of uncommitted/current M2 source while avoiding an external
+# fixture download.
+mkdir -p "${m1_fixture_dir}"
+git -C "${repo_root}" cat-file -e "${m1_fixture_commit}^{commit}"
+git -C "${repo_root}" archive "${m1_fixture_commit}" | tar -x -C "${m1_fixture_dir}"
+m1_fixture_version="$(tr -d '\r\n' < "${m1_fixture_dir}/VERSION")"
+m1_fixture_created="$(git -C "${repo_root}" show -s --format=%cI "${m1_fixture_commit}")"
 
 cleanup() {
   exit_code=$?
@@ -181,12 +195,26 @@ docker build \
   --build-arg "CREATED=${created}" \
   --tag "${fixtures_image}" \
   "${repo_root}"
+docker build \
+  --build-arg "VERSION=${m1_fixture_version}" \
+  --build-arg "VCS_REF=${m1_fixture_commit}" \
+  --build-arg "CREATED=${m1_fixture_created}" \
+  --tag "${m1_manager_image}" \
+  "${m1_fixture_dir}"
+docker build \
+  --file "${m1_fixture_dir}/Dockerfile.importer" \
+  --build-arg "VERSION=${m1_fixture_version}" \
+  --build-arg "VCS_REF=${m1_fixture_commit}" \
+  --build-arg "CREATED=${m1_fixture_created}" \
+  --tag "${m1_importer_image}" \
+  "${m1_fixture_dir}"
 
 "${kind_bin}" create cluster --name "${cluster_name}" --image "${node_image}" \
   --config "${repo_root}/test/kind/cluster.yaml" --wait 5m
 cluster_created=1
 "${kind_bin}" load docker-image --name "${cluster_name}" \
-  "${manager_image}" "${importer_image}" "${fixtures_image}"
+  "${manager_image}" "${importer_image}" "${fixtures_image}" \
+  "${m1_manager_image}" "${m1_importer_image}"
 
 "${kubectl_bin}" create namespace "${namespace}"
 worker_node="${cluster_name}-worker"
@@ -204,6 +232,82 @@ sed "s|KAMA_WORKER_NODE|${worker_node}|g" \
 "${kubectl_bin}" apply -f "${tmp_dir}/artifact-storage.yaml"
 "${kubectl_bin}" -n "${namespace}" wait \
   --for=jsonpath='{.status.phase}'=Bound pvc/kama-manual-models --timeout=60s
+
+# Install the pinned pre-M2 chart and binaries as Helm release `kama`. This is
+# the real starting point for the CRD-first upgrade exercised below; it is not
+# a current-chart install preceded only by old schemas.
+"${helm_bin}" package "${m1_fixture_dir}/charts/kama" \
+  --version "${m1_fixture_version}" \
+  --app-version "${m1_fixture_version}" \
+  --destination "${tmp_dir}"
+m1_chart_package="${tmp_dir}/kama-${m1_fixture_version}.tgz"
+"${helm_bin}" upgrade --install kama "${m1_chart_package}" \
+  --namespace "${namespace}" \
+  --set "image.repository=${m1_manager_image%:*}" \
+  --set "image.tag=${m1_manager_image##*:}" \
+  --set image.pullPolicy=Never \
+  --set "importer.image.repository=${m1_importer_image%:*}" \
+  --set "importer.image.tag=${m1_importer_image##*:}" \
+  --set importer.image.pullPolicy=Never \
+  --set metrics.enabled=true \
+  --set metrics.secure=false \
+  --wait \
+  --timeout 2m
+"${kubectl_bin}" -n "${namespace}" rollout status deployment/kama --timeout=2m
+if [[ "$(${kubectl_bin} -n "${namespace}" get deployment kama \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="manager")].image}')" != \
+  "${m1_manager_image}" ]]; then
+  echo "pinned M1 release did not run the fixture manager image" >&2
+  exit 1
+fi
+m1_manager_deployment_uid="$(${kubectl_bin} -n "${namespace}" get deployment kama \
+  -o jsonpath='{.metadata.uid}')"
+"${kubectl_bin}" wait --for=condition=Established --timeout=60s \
+  crd/modelcaches.kama.tannerburns.github.io \
+  crd/modelartifacts.kama.tannerburns.github.io
+wait_for_admission "the pinned M1 fixture install"
+"${kubectl_bin}" -n "${namespace}" apply -f - <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: m1-upgrade-preserved
+spec:
+  storage:
+    existingClaim:
+      name: kama-manual-models
+EOF
+"${kubectl_bin}" -n "${namespace}" apply -f - <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: m1-upgrade-artifact
+spec:
+  format: GGUF
+  entrypoint: model.gguf
+  source:
+    persistentVolumeClaim:
+      claimName: kama-manual-models
+      rootPath: models
+      importPolicy: Direct
+EOF
+wait_for_condition modelcache m1-upgrade-preserved Ready 2m
+wait_for_condition modelartifact m1-upgrade-artifact Ready 2m
+m1_upgrade_uid="$(${kubectl_bin} -n "${namespace}" get modelcache m1-upgrade-preserved \
+  -o jsonpath='{.metadata.uid}')"
+m1_artifact_uid="$(${kubectl_bin} -n "${namespace}" get modelartifact m1-upgrade-artifact \
+  -o jsonpath='{.metadata.uid}')"
+m1_artifact_digest="$(${kubectl_bin} -n "${namespace}" get modelartifact m1-upgrade-artifact \
+  -o jsonpath='{.status.artifactDigest}')"
+m1_cache_claim="$(${kubectl_bin} -n "${namespace}" get modelcache m1-upgrade-preserved \
+  -o jsonpath='{.status.claimName}')"
+m1_release_revision="$(${helm_bin} status kama --namespace "${namespace}" \
+  -o json | jq -r '.version')"
+if [[ -z "${m1_upgrade_uid}" || -z "${m1_artifact_uid}" || \
+  -z "${m1_artifact_digest}" || -z "${m1_cache_claim}" || \
+  -z "${m1_manager_deployment_uid}" || "${m1_release_revision}" != "1" ]]; then
+  echo "pinned M1 fixture did not establish release revision 1 and persistent resources" >&2
+  exit 1
+fi
 
 "${helm_bin}" repo add keda https://kedacore.github.io/charts --force-update
 "${helm_bin}" repo update keda
@@ -257,7 +361,16 @@ fi
 
 OUTPUT_DIR="${repo_root}/dist" HELM="${helm_bin}" bash "${repo_root}/hack/helm-package.sh"
 chart_package="${repo_root}/dist/kama-${version}.tgz"
-"${helm_bin}" upgrade --install kama "${chart_package}" \
+
+# Helm intentionally does not upgrade CRDs from crds/. Apply the M2 bundle
+# first, wait for all schemas, and only then upgrade the same M1 release.
+"${kubectl_bin}" apply --server-side --field-manager=kama-crd-upgrade \
+  -f "${repo_root}/config/crd/bases"
+"${kubectl_bin}" wait --for=condition=Established --timeout=60s \
+  crd/modelcaches.kama.tannerburns.github.io \
+  crd/modelartifacts.kama.tannerburns.github.io \
+  crd/modeldeployments.kama.tannerburns.github.io
+"${helm_bin}" upgrade kama "${chart_package}" \
   --namespace "${namespace}" \
   --set "image.repository=${manager_image%:*}" \
   --set "image.tag=${manager_image##*:}" \
@@ -286,8 +399,33 @@ fi
 "${kubectl_bin}" wait --for=condition=Established \
   crd/modelcaches.kama.tannerburns.github.io \
   crd/modelartifacts.kama.tannerburns.github.io \
+  crd/modeldeployments.kama.tannerburns.github.io \
   --timeout=60s
 wait_for_admission "the initial manager rollout"
+upgraded_release_revision="$(${helm_bin} status kama --namespace "${namespace}" \
+  -o json | jq -r '.version')"
+if [[ "${upgraded_release_revision}" != "2" ]] || \
+  [[ "$(${kubectl_bin} -n "${namespace}" get deployment kama \
+    -o jsonpath='{.metadata.uid}')" != "${m1_manager_deployment_uid}" ]] || \
+  [[ "$(${kubectl_bin} -n "${namespace}" get modelcache m1-upgrade-preserved \
+    -o jsonpath='{.metadata.uid}')" != "${m1_upgrade_uid}" ]] || \
+  [[ "$(${kubectl_bin} -n "${namespace}" get modelartifact m1-upgrade-artifact \
+    -o jsonpath='{.metadata.uid}')" != "${m1_artifact_uid}" ]] || \
+  [[ "$(${kubectl_bin} -n "${namespace}" get modelartifact m1-upgrade-artifact \
+    -o jsonpath='{.status.artifactDigest}')" != "${m1_artifact_digest}" ]] || \
+  [[ "$(${kubectl_bin} -n "${namespace}" get modelcache m1-upgrade-preserved \
+    -o jsonpath='{.status.claimName}')" != "${m1_cache_claim}" ]]; then
+  echo "CRD-first Helm upgrade did not advance the same release and preserve M1 resource UIDs" >&2
+  exit 1
+fi
+if [[ "$(${kubectl_bin} -n "${namespace}" get deployment kama \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="manager")].image}')" != \
+  "${manager_image}" ]]; then
+  echo "M2 Helm revision did not roll the release to the current manager image" >&2
+  exit 1
+fi
+wait_for_condition modelcache m1-upgrade-preserved Ready 2m
+wait_for_condition modelartifact m1-upgrade-artifact Ready 2m
 
 manager_service_account="system:serviceaccount:${namespace}:kama"
 for verb in patch update; do
@@ -338,6 +476,95 @@ EOF
 )"
 if [[ "${default_import_policy}" != "Copy" ]]; then
   echo "ModelArtifact admission did not default PVC importPolicy to Copy" >&2
+  exit 1
+fi
+
+default_modeldeployment="$(${kubectl_bin} -n "${namespace}" create --dry-run=server \
+  -f - -o json <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: admission-modeldeployment-default-check
+spec:
+  modelRef:
+    name: unavailable-artifact
+  placement:
+    mode: CPU
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+EOF
+)"
+if ! jq -e '
+  .spec.runtime.desiredConcurrency == 1 and
+  .spec.runtime.drainTimeout == "10m" and
+  .spec.runtime.kvCache.keyType == "f16" and
+  .spec.runtime.kvCache.valueType == "f16" and
+  .spec.runtime.expert.batchSize == 2048 and
+  .spec.runtime.expert.microBatchSize == 512 and
+  .spec.runtime.expert.flashAttention == "Auto"
+' <<<"${default_modeldeployment}" >/dev/null; then
+  echo "ModelDeployment admission did not apply the M2 runtime defaults" >&2
+  jq '.spec' <<<"${default_modeldeployment}" >&2
+  exit 1
+fi
+
+"${kubectl_bin}" -n "${namespace}" apply -f - <<'EOF'
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: kind-artifact-gated-serving
+spec:
+  modelRef:
+    name: unavailable-artifact
+  placement:
+    mode: CPU
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+EOF
+for _ in $(seq 1 60); do
+  gated_status="$(${kubectl_bin} -n "${namespace}" get modeldeployment kind-artifact-gated-serving \
+    -o json 2>/dev/null || true)"
+  if [[ -n "${gated_status}" ]] && jq -e '
+    .status.observedGeneration == .metadata.generation and
+    (.status.desiredReplicas // 0) == 0 and
+    (.status.readyReplicas // 0) == 0 and
+    .status.serviceRef.name != "" and
+    (.status.deploymentRef == null) and
+    ([.status.conditions[] | select(.type == "ArtifactReady" and .status == "False" and .reason == "ArtifactNotFound")] | length) == 1 and
+    ([.status.conditions[] | select(.type == "Serving" and .status == "False")] | length) == 1 and
+    ([.status.conditions[] | select(.type == "Degraded" and .status == "True" and .reason == "CPUOnlyRequested")] | length) == 1
+  ' <<<"${gated_status}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+if [[ -z "${gated_status:-}" ]] || ! jq -e '
+  .status.observedGeneration == .metadata.generation and .status.serviceRef.name != "" and
+  ([.status.conditions[] | select(.type == "ArtifactReady" and .status == "False")] | length) == 1
+' <<<"${gated_status}" >/dev/null; then
+  echo "ModelDeployment did not remain safely gated on its missing artifact" >&2
+  [[ -z "${gated_status:-}" ]] || jq '.status' <<<"${gated_status}" >&2
+  exit 1
+fi
+gated_service="$(jq -r '.status.serviceRef.name' <<<"${gated_status}")"
+if [[ "$(${kubectl_bin} -n "${namespace}" get deployment \
+  -l kama.tannerburns.github.io/model-deployment=kind-artifact-gated-serving \
+  -o json | jq '.items | length')" != "0" ]]; then
+  echo "artifact-gated ModelDeployment created a serving workload" >&2
+  exit 1
+fi
+if ${kubectl_bin} -n "${namespace}" get endpointslice \
+  -l "kubernetes.io/service-name=${gated_service}" -o json | \
+  jq -e 'any(.items[].endpoints[]?; .conditions.ready == true)' >/dev/null; then
+  echo "artifact-gated ModelDeployment exposed a ready endpoint" >&2
   exit 1
 fi
 
@@ -662,14 +889,40 @@ metric_sample_has_labels() {
   return 1
 }
 
+metric_sample_count_with_labels() {
+  local metric_name=$1
+  shift
+  local sample
+  local expected_label
+  local matched
+  local count=0
+  while IFS= read -r sample; do
+    if [[ "${sample}" != "${metric_name}{"* ]]; then
+      continue
+    fi
+    matched=1
+    for expected_label in "$@"; do
+      if [[ "${sample}" != *"${expected_label}"* ]]; then
+        matched=0
+        break
+      fi
+    done
+    if [[ ${matched} -eq 1 ]]; then
+      count=$((count + 1))
+    fi
+  done <<<"${metrics_payload}"
+  printf '%s\n' "${count}"
+}
+
 if ! metric_sample_has_labels kama_model_cache_ready \
   'cache="kind-cache"' 'namespace="kama-system"'; then
   echo "manager metrics are missing the ready cache gauge with bounded object labels" >&2
   exit 1
 fi
-cache_ready_series="$(grep -c '^kama_model_cache_ready{' <<<"${metrics_payload}" || true)"
+cache_ready_series="$(metric_sample_count_with_labels kama_model_cache_ready \
+  'cache="kind-cache"' 'namespace="kama-system"')"
 if [[ "${cache_ready_series}" != "1" ]]; then
-  echo "cache-ready metric exposed ${cache_ready_series} series, want exactly one" >&2
+  echo "cache-ready metric exposed ${cache_ready_series} kind-cache series, want exactly one" >&2
   exit 1
 fi
 if ! metric_sample_has_labels kama_model_artifact_operations_total \
@@ -765,6 +1018,9 @@ if [[ "${E2E_STORAGE_SUITE:-0}" == "1" ]]; then
     fi
   done
 fi
+
+"${kubectl_bin}" -n "${namespace}" delete modeldeployment kind-artifact-gated-serving \
+  --wait --timeout=2m
 
 "${helm_bin}" uninstall kama --namespace "${namespace}" --wait
 if ! "${kubectl_bin}" -n "${namespace}" get pvc "${managed_claim}" >/dev/null; then

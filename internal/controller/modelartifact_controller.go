@@ -1291,6 +1291,15 @@ func (r *ModelArtifactReconciler) reconcileDelete(
 	if !controllerutil.ContainsFinalizer(modelArtifact, kamav1alpha1.ModelArtifactFinalizer) {
 		return ctrl.Result{}, nil
 	}
+	referenced, err := r.modelArtifactHasDeploymentReferences(ctx, modelArtifact)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if referenced {
+		// Keep the artifact identity and backing storage intact until every
+		// referring ModelDeployment has completed its drain-first finalizer.
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
 	cleaning, err := r.cleanupArtifactImporterResources(ctx, modelArtifact)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -1342,6 +1351,79 @@ func (r *ModelArtifactReconciler) reconcileDelete(
 		return ctrl.Result{}, err
 	}
 	return r.reconcileArtifactCleanupJob(ctx, modelArtifact, storage, operation)
+}
+
+func (r *ModelArtifactReconciler) modelArtifactHasDeploymentReferences(
+	ctx context.Context,
+	modelArtifact *kamav1alpha1.ModelArtifact,
+) (bool, error) {
+	var deployments kamav1alpha1.ModelDeploymentList
+	if err := r.artifactLifecycleReader().List(
+		ctx, &deployments, client.InNamespace(modelArtifact.Namespace),
+	); err != nil {
+		return false, err
+	}
+	for index := range deployments.Items {
+		if deployments.Items[index].Spec.ModelRef.Name == modelArtifact.Name {
+			return true, nil
+		}
+	}
+
+	// A mutable or deleting ModelDeployment can disappear or point at a new
+	// artifact before a defensive drain completes. Keep the old storage
+	// identity held while a controller-labeled serving Pod still mounts its
+	// exact claim/subpath, even if the referring API object has gone away.
+	var pods corev1.PodList
+	if err := r.artifactLifecycleReader().List(
+		ctx, &pods, client.InNamespace(modelArtifact.Namespace),
+		client.MatchingLabels{artifactUIDLabel: boundedLabelValue(string(modelArtifact.UID))},
+	); err != nil {
+		return false, err
+	}
+	for index := range pods.Items {
+		pod := &pods.Items[index]
+		if pod.Labels[managedByLabel] != kamaName ||
+			pod.Labels[componentLabel] != modelDeploymentComponent {
+			continue
+		}
+		if podMountsArtifactLocation(pod, modelArtifact.Status.Location) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func podMountsArtifactLocation(pod *corev1.Pod, location *kamav1alpha1.ModelArtifactLocationStatus) bool {
+	if location == nil || location.ClaimName == "" || location.SubPath == "" {
+		return false
+	}
+	volumeFound := false
+	for _, volume := range pod.Spec.Volumes {
+		if volume.Name == runtimeModelVolumeName && volume.PersistentVolumeClaim != nil &&
+			volume.PersistentVolumeClaim.ClaimName == location.ClaimName && volume.PersistentVolumeClaim.ReadOnly {
+			volumeFound = true
+			break
+		}
+	}
+	if !volumeFound {
+		return false
+	}
+	expectedSubPath := location.SubPath
+	if expectedSubPath == "." {
+		expectedSubPath = ""
+	}
+	for _, container := range pod.Spec.Containers {
+		if container.Name != runtimeContainerName {
+			continue
+		}
+		for _, mount := range container.VolumeMounts {
+			if mount.Name == runtimeModelVolumeName && mount.MountPath == runtimeModelMount &&
+				mount.SubPath == expectedSubPath && mount.ReadOnly {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cleanupArtifactImporterResources stops ordinary importer Pods before a

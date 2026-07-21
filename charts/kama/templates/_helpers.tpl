@@ -83,6 +83,37 @@ app.kubernetes.io/component: manager
 {{- join "," $names -}}
 {{- end }}
 
+{{/* CPU runtime image reference; digest wins over tag. */}}
+{{- define "kama.runtimeCPUImage" -}}
+{{- if .Values.runtime.cpu.image.digest -}}
+{{- printf "%s@%s" .Values.runtime.cpu.image.repository .Values.runtime.cpu.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.runtime.cpu.image.repository (default .Chart.AppVersion .Values.runtime.cpu.image.tag) -}}
+{{- end -}}
+{{- end }}
+
+{{/* CUDA runtime image reference; digest wins over tag. */}}
+{{- define "kama.runtimeCUDAImage" -}}
+{{- if .Values.runtime.cuda.image.digest -}}
+{{- printf "%s@%s" .Values.runtime.cuda.image.repository .Values.runtime.cuda.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.runtime.cuda.image.repository (default .Chart.AppVersion .Values.runtime.cuda.image.tag) -}}
+{{- end -}}
+{{- end }}
+
+{{/* Comma-separated runtime image pull Secret names for the manager flag. */}}
+{{- define "kama.runtimeImagePullSecrets" -}}
+{{- $names := list -}}
+{{- range .Values.runtime.imagePullSecrets -}}
+{{- if kindIs "string" . -}}
+{{- $names = append $names . -}}
+{{- else -}}
+{{- $names = append $names .name -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $names -}}
+{{- end }}
+
 {{/* Helm-owned webhook TLS Secret. */}}
 {{- define "kama.webhookTLSSecretName" -}}
 {{- if .Values.webhook.tls.secretName -}}

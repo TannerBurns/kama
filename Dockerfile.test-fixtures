@@ -34,7 +34,15 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       -buildvcs=false \
       -ldflags="-s -w -buildid= -X github.com/TannerBurns/kama/internal/version.Version=${VERSION}" \
       -o /out/external-scaler \
-      ./cmd/external-scaler
+      ./cmd/external-scaler && \
+    CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
+    go build \
+      -mod=readonly \
+      -trimpath \
+      -buildvcs=false \
+      -ldflags="-s -w -buildid=" \
+      -o /out/serving-test-client \
+      ./cmd/serving-test-client
 
 FROM scratch
 
@@ -57,6 +65,7 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifi
 COPY --from=builder /out/fake-llama-server /fake-llama-server
 COPY --from=builder /out/fake-huggingface-server /fake-huggingface-server
 COPY --from=builder /out/external-scaler /external-scaler
+COPY --from=builder /out/serving-test-client /serving-test-client
 
 USER 65532:65532
 ENTRYPOINT ["/fake-llama-server"]

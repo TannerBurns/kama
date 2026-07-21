@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: KAMA_SERVING_CLIENT_NAME
+  labels:
+    app.kubernetes.io/name: kama-serving-test-client
+    app.kubernetes.io/component: test
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kama-serving-test-client
+        app.kubernetes.io/component: test
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: client
+          image: KAMA_SERVING_CLIENT_IMAGE
+          imagePullPolicy: KAMA_SERVING_CLIENT_PULL_POLICY
+          command:
+            - /serving-test-client
+          args:
+            - --endpoint=http://KAMA_SERVING_SERVICE.KAMA_SERVING_NAMESPACE.svc:8080/v1/chat/completions
+            - --model=KAMA_SERVING_MODEL
+            - --timeout=2m
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true

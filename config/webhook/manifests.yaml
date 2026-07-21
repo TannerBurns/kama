@@ -44,6 +44,26 @@ webhooks:
     resources:
     - modelcaches
   sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-kama-tannerburns-github-io-v1alpha1-modeldeployment
+  failurePolicy: Fail
+  name: mmodeldeployment.kama.tannerburns.github.io
+  rules:
+  - apiGroups:
+    - kama.tannerburns.github.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - modeldeployments
+  sideEffects: None
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
@@ -89,4 +109,24 @@ webhooks:
     - UPDATE
     resources:
     - modelcaches
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-kama-tannerburns-github-io-v1alpha1-modeldeployment
+  failurePolicy: Fail
+  name: vmodeldeployment.kama.tannerburns.github.io
+  rules:
+  - apiGroups:
+    - kama.tannerburns.github.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - modeldeployments
   sideEffects: None

@@ -11,6 +11,8 @@ for in-process controller integration.
 |---|---|---|---|
 | Artifact-plane storage resilience | `test/e2e/storage` | `make test-e2e-storage` | `dist/e2e/storage` |
 | Artifact-plane Hugging Face import | `test/e2e/huggingface` | `make test-e2e-huggingface` | `dist/e2e/huggingface` |
+| Baseline CPU serving | Pinned public SmolLM2 and production CPU runtime | `make test-e2e-serving-cpu` | `dist/e2e/serving-cpu` |
+| Protected NVIDIA serving | Dedicated NVIDIA cluster and production CUDA runtime | `make test-e2e-serving-nvidia` | `dist/e2e/serving-nvidia` |
 
 The storage suite is deterministic and uses the repository's fake Hub plus an
 in-runner NFS service. The Hugging Face suite always imports the pinned public
@@ -21,6 +23,67 @@ regression evidence.
 GitHub runs both suites as parallel jobs in
 [the end-to-end workflow](../../.github/workflows/e2e.yml). The protected
 Hugging Face inputs are scoped to the `e2e-huggingface` environment.
+
+CPU serving runs on hosted Linux runners and owns a disposable Kind cluster. The
+`Kind compatibility` workflow executes the full CPU suite for Kubernetes 1.34,
+1.35, and 1.36. Its stable `M2 CPU/Kind acceptance` job succeeds only when every
+matrix entry and its evidence verification succeed, so branch protection does not
+need to track matrix-generated check names. The standalone end-to-end workflow also
+runs a Kubernetes 1.36 CPU regression.
+
+The CPU production images are built with Buildx, identified and verified by their
+manifest digests and OCI labels, then loaded into each isolated cluster under
+run-local tags with `imagePullPolicy: Never`. Those tags are transport aliases, not
+published image identities. NVIDIA serving runs only from trusted `main` history on
+`[self-hosted, Linux, X64, kama-nvidia]` with a protected kubeconfig. Pull requests
+never receive that kubeconfig or GPU environment. Both serving suites use a genuinely
+loadable model and production runtime images; the synthetic GGUF and fake
+llama-server remain nonproduction controller fixtures.
+
+The NVIDIA runner should be ephemeral; if that is not possible, its runner group and
+cluster credentials must be limited to this repository. Configure the protected
+`e2e-nvidia` environment with required reviewers and a `main`-only deployment branch,
+and make the stable `Protected NVIDIA acceptance gate` check required for M2
+promotion. A hosted validation job deliberately fails a manual dispatch from a
+non-`main` ref. The GPU job checks out the immutable
+`E2E_NVIDIA_EXPECTED_COMMIT` rather than the moving workflow SHA, fetches full
+history, and accepts it only when it is an ancestor of current `origin/main`; this
+lets scheduled validation exercise the published images' exact source commit without
+allowing stale or untrusted branch code. Its protected kubeconfig is written to a
+run-specific file with mode `0600` and removed in an `always()` cleanup step. The
+protected cluster API server must be in the supported Kubernetes 1.34–1.36 range.
+
+The serving data-path check runs Kama's static client in a bounded in-cluster Job and
+requires a nonempty SSE data event followed by `data: [DONE]` through the generated
+ClusterIP Service DNS. Pod port-forwarding is reserved for supervisor diagnostics and
+the CPU suite's active drain orchestration; it is not ClusterIP reachability evidence.
+
+Serving evidence is qualifying only when every image used for the run has an
+immutable manifest digest and OCI source/revision labels matching the checked-out
+commit. In addition, the protected NVIDIA lane accepts only the canonical Kama GHCR
+repositories at immutable digests and verifies each image's keyless release signature
+and SPDX JSON attestation with cosign, bound to the trusted release workflow and
+qualification commit. It queries the allocated container for its actual device and
+driver, reads the installed CUDA version, checks the installed CUDA runtime package,
+and verifies that `llama-server` links to CUDA runtime and BLAS libraries. Supplied
+labels are corroborating provenance, not hardware/runtime evidence. The suite also
+verifies status against the exact artifact, workload, Service, Pod, EndpointSlice,
+runtime image, and fingerprint identities and retains sanitized snapshots. Missing
+OCI inspection, signature, attestation, CUDA, or linkage evidence leaves a functional
+run explicitly `qualifying=false` rather than converting an unverifiable run into
+acceptance evidence.
+
+Both serving workflows run a shared, strict cross-file verifier after the suite:
+
+```sh
+make verify-e2e-serving-cpu-evidence K8S_MINOR=1.36
+make verify-e2e-serving-nvidia-evidence
+```
+
+The targets validate the complete retained evidence set, including qualification,
+source/image identity, Kubernetes version, status/object identity, readiness,
+streaming, failure, drain, restart, redaction, and mode-specific runtime facts. A
+suite exit code alone is therefore insufficient to satisfy an M2 acceptance gate.
 
 ## Suite contract
 

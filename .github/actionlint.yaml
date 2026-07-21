@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - kama-nvidia
+
+# Repository/environment variables are intentionally configured outside source
+# for protected acceptance workflows.
+config-variables: null

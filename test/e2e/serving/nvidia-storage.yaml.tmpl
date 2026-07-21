@@ -1,0 +1,35 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: e2e-serving-nvidia-cache
+spec:
+  retentionPolicy: Delete
+  storage:
+    claimTemplate:
+      spec:
+        storageClassName: E2E_NVIDIA_STORAGE_CLASS
+        accessModes:
+          - ReadWriteOnce
+        volumeMode: Filesystem
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: e2e-serving-nvidia-model
+spec:
+  format: GGUF
+  entrypoint: smollm2-360m-instruct-q8_0.gguf
+  cacheRef:
+    name: e2e-serving-nvidia-cache
+  verification:
+    expectedSHA256: 48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201
+    expectedSize: 386404992
+  source:
+    huggingFace:
+      repository: HuggingFaceTB/SmolLM2-360M-Instruct-GGUF
+      revision: 593b5a2e04c8f3e4ee880263f93e0bd2901ad47f
+      files:
+        - smollm2-360m-instruct-q8_0.gguf

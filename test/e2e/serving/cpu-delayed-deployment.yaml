@@ -1,0 +1,20 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: e2e-serving-cpu-delayed
+spec:
+  modelRef:
+    name: e2e-serving-model
+  placement:
+    mode: CPU
+  runtime:
+    maxContextTokens: 2048
+    desiredConcurrency: 1
+    drainTimeout: 2m
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      cpu: 100m
+      memory: 2Gi

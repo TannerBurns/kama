@@ -18,7 +18,8 @@ tags would allow an apparently coherent release to contain mismatched components
   release version as the manager.
 - The nonproduction fixture image is
   `ghcr.io/tannerburns/kama-test-fixtures` and is never part of the supported runtime
-  contract.
+  contract. It also carries bounded static clients used only for in-cluster acceptance
+  checks.
 - Future independently deployed component images use
   `ghcr.io/tannerburns/kama-<component>`.
 - The Helm chart is named `kama` and is published at

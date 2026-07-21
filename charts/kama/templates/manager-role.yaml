@@ -12,6 +12,7 @@ rules:
     resources:
       - modelartifacts
       - modelcaches
+      - modeldeployments
     verbs:
       - get
       - list
@@ -23,6 +24,7 @@ rules:
     resources:
       - modelartifacts/finalizers
       - modelcaches/finalizers
+      - modeldeployments/finalizers
     verbs:
       - update
   - apiGroups:
@@ -30,10 +32,31 @@ rules:
     resources:
       - modelartifacts/status
       - modelcaches/status
+      - modeldeployments/status
     verbs:
       - get
       - patch
       - update
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
   - apiGroups:
       - ""
     resources:
@@ -76,11 +99,14 @@ rules:
       - ""
     resources:
       - configmaps
+      - services
     verbs:
       - create
       - delete
       - get
       - list
+      - patch
+      - update
       - watch
   - apiGroups:
       - ""
@@ -89,6 +115,8 @@ rules:
     verbs:
       - get
       - list
+      - patch
+      - update
       - watch
   - apiGroups:
       - ""
@@ -113,6 +141,14 @@ rules:
     verbs:
       - create
       - patch
+  - apiGroups:
+      - discovery.k8s.io
+    resources:
+      - endpointslices
+    verbs:
+      - get
+      - list
+      - watch
   - apiGroups:
       - coordination.k8s.io
     resources:
