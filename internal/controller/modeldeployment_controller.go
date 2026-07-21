@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -665,12 +666,8 @@ func mergeMetadataMap(existing, desired map[string]string) map[string]string {
 		return nil
 	}
 	merged := make(map[string]string, len(existing)+len(desired))
-	for key, value := range existing {
-		merged[key] = value
-	}
-	for key, value := range desired {
-		merged[key] = value
-	}
+	maps.Copy(merged, existing)
+	maps.Copy(merged, desired)
 	return merged
 }
 
