@@ -130,7 +130,7 @@ jobs:
           unsafe_list="$(mktemp "${RUNNER_TEMP}/kama-nvidia-unsafe.XXXXXX")"
           trap 'rm -f -- "${unsafe_list}"' EXIT
           if [[ -d "${evidence_dir}" ]]; then
-            rg -l -i \
+            grep -RIlE -i \
               'authorization:|bearer[[:space:]]|hf_[a-z0-9]+|client-key-data:|client-certificate-data:|(^|[[:space:]])token:[[:space:]]|password[=:]' \
               "${evidence_dir}" >"${unsafe_list}" 2>/dev/null || true
           fi

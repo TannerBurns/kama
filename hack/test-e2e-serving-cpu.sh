@@ -48,7 +48,7 @@ fi
 if [[ ! -x "${helm_bin}" ]]; then
   helm_bin="$(command -v helm || true)"
 fi
-for tool in "${kind_bin}" "${kubectl_bin}" "${helm_bin}" docker curl git jq rg sed; do
+for tool in "${kind_bin}" "${kubectl_bin}" "${helm_bin}" docker curl git grep jq sed; do
   if [[ -z "${tool}" ]] || ! command -v "${tool}" >/dev/null 2>&1; then
     echo "required command is unavailable: ${tool:-unset}" >&2
     exit 1
@@ -254,7 +254,8 @@ capture_evidence() {
   fi
   redaction_verified=0
   mapfile -t unsafe_evidence < <(
-    rg -l -i 'authorization:|bearer[[:space:]]|hf_[a-z0-9]+' "${evidence_dir}" 2>/dev/null || true
+    grep -RIlE -i 'authorization:|bearer[[:space:]]|hf_[a-z0-9]+' \
+      "${evidence_dir}" 2>/dev/null || true
   )
   if [[ ${#unsafe_evidence[@]} -eq 0 ]]; then
     redaction_verified=1
@@ -307,7 +308,8 @@ cleanup() {
   if [[ ${passed} -eq 1 && (${evidence_complete} -ne 1 || ${redaction_verified} -ne 1) ]]; then
     exit_code=1
   fi
-  if rg -n -i 'authorization:|bearer[[:space:]]|hf_[a-z0-9]+' "${evidence_dir}" >/dev/null 2>&1; then
+  if grep -RIEq -i 'authorization:|bearer[[:space:]]|hf_[a-z0-9]+' \
+    "${evidence_dir}" >/dev/null 2>&1; then
     echo "credential-shaped content found in CPU serving evidence" >&2
     exit_code=1
   fi

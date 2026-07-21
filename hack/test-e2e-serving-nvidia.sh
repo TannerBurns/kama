@@ -84,7 +84,7 @@ fi
 if [[ ! -x "${cosign_bin}" ]]; then
   cosign_bin="$(command -v cosign || true)"
 fi
-for tool in "${kubectl_bin}" "${helm_bin}" "${cosign_bin}" awk curl git jq realpath rg sed; do
+for tool in "${kubectl_bin}" "${helm_bin}" "${cosign_bin}" awk curl git grep jq realpath sed; do
   if [[ -z "${tool}" ]] || ! command -v "${tool}" >/dev/null 2>&1; then
     echo "required command is unavailable: ${tool:-unset}" >&2
     exit 1
@@ -143,7 +143,7 @@ sanitize_evidence() {
   local unsafe_names="${tmp_dir}/unsafe-evidence-names.txt"
   : >"${unsafe_list}"
   : >"${unsafe_names}"
-  rg -l -i \
+  grep -RIlE -i \
     'authorization:|bearer[[:space:]]|hf_[a-z0-9]+|client-key-data:|client-certificate-data:|(^|[[:space:]])token:[[:space:]]|password[=:]' \
     "${evidence_dir}" >"${unsafe_list}" 2>/dev/null || true
   if [[ ! -s "${unsafe_list}" ]]; then
