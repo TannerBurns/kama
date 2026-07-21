@@ -106,14 +106,38 @@ if ! grep -Fq "KEDA_VERSION: ${keda_version}" "${repo_root}/.github/workflows/ki
 fi
 for minor in 1.34 1.35 1.36; do
   kind_image="$(make_version "KIND_NODE_IMAGE_${minor}")"
+  kind_kubernetes_version="${kind_image#kindest/node:}"
+  kind_kubernetes_version="${kind_kubernetes_version%@sha256:*}"
+  kubectl_version="$(make_version "KUBECTL_VERSION_${minor}")"
   if [[ -z "${kind_image}" ]] || ! grep -Fq "node-image: ${kind_image}" "${repo_root}/.github/workflows/kind.yml"; then
     echo "Kind workflow image for Kubernetes ${minor} does not match hack/versions.mk" >&2
     exit 1
   fi
+  if [[ "${kubectl_version}" != "${kind_kubernetes_version}" ]]; then
+    echo "kubectl for Kubernetes ${minor} does not match its Kind node image" >&2
+    exit 1
+  fi
+  for arch in amd64 arm64; do
+    kubectl_sha256="$(make_version "KUBECTL_SHA256_${minor}_${arch}")"
+    if [[ ! "${kubectl_sha256}" =~ ^[a-f0-9]{64}$ ]]; then
+      echo "kubectl ${kubectl_version} ${arch} does not have a pinned SHA-256" >&2
+      exit 1
+    fi
+  done
 done
+if ! grep -Fq 'test-kind K8S_MINOR=${{ matrix.kubernetes }}' \
+  "${repo_root}/.github/workflows/kind.yml"; then
+  echo "Kind workflow does not select the matrix-matched kubectl" >&2
+  exit 1
+fi
 
 makefile="${repo_root}/Makefile"
 evidence_verifier="${repo_root}/hack/verify-m2-acceptance-evidence.sh"
+if ! grep -Fq 'https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$(KUBECTL_ARCH)/kubectl' \
+  "${makefile}" || ! grep -Fq 'sha256sum --check --strict' "${makefile}"; then
+  echo "Makefile does not install checksum-verified, version-matched kubectl binaries" >&2
+  exit 1
+fi
 if [[ ! -x "${evidence_verifier}" ]]; then
   echo "M2 acceptance evidence verifier is missing or not executable" >&2
   exit 1

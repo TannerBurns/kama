@@ -547,8 +547,14 @@ fi
 cluster_created=1
 "${kubectl_bin}" version -o json >"${evidence_dir}/kubernetes-version.json" \
   2>"${evidence_dir}/kubernetes-version.stderr"
+client_git_version="$(jq -r '.clientVersion.gitVersion // empty' \
+  "${evidence_dir}/kubernetes-version.json")"
 server_git_version="$(jq -r '.serverVersion.gitVersion // empty' \
   "${evidence_dir}/kubernetes-version.json")"
+if [[ "${client_git_version}" != "v${expected_k8s_minor}."* ]]; then
+  echo "kubectl ${client_git_version:-unknown} does not match K8S_MINOR=${expected_k8s_minor}" >&2
+  exit 1
+fi
 if [[ "${server_git_version}" != "v${expected_k8s_minor}."* ]]; then
   echo "Kind API server ${server_git_version:-unknown} does not match K8S_MINOR=${expected_k8s_minor}" >&2
   exit 1

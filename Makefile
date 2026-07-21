@@ -30,6 +30,9 @@ COPYRIGHT_YEAR ?= 2026
 K8S_MINOR ?= 1.36
 KIND_CLUSTER ?= kama-$(subst .,-,$(K8S_MINOR))
 KIND_NODE_IMAGE ?= $(KIND_NODE_IMAGE_$(K8S_MINOR))
+KUBECTL_VERSION ?= $(KUBECTL_VERSION_$(K8S_MINOR))
+KUBECTL_ARCH ?= $(shell uname -m | sed -e 's/^x86_64$$/amd64/' -e 's/^aarch64$$/arm64/')
+KUBECTL_SHA256 ?= $(KUBECTL_SHA256_$(K8S_MINOR)_$(KUBECTL_ARCH))
 CPU_E2E_EVIDENCE_DIR ?= $(DIST)/e2e/serving-cpu
 NVIDIA_E2E_EVIDENCE_DIR ?= $(DIST)/e2e/serving-nvidia
 E2E_EXPECTED_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
@@ -48,6 +51,9 @@ GOVULNCHECK := $(LOCALBIN)/govulncheck
 GO_LICENSES := $(LOCALBIN)/go-licenses
 ACTIONLINT := $(LOCALBIN)/actionlint
 KIND := $(LOCALBIN)/kind
+KUBECTL_LOCAL := $(LOCALBIN)/kubectl
+KUBECTL ?= $(KUBECTL_LOCAL)
+KUBECTL_VERSIONED := $(LOCALBIN)/kubectl-$(KUBECTL_VERSION)-linux-$(KUBECTL_ARCH)
 HELM := $(LOCALBIN)/helm
 SYFT := $(LOCALBIN)/syft
 COSIGN := $(LOCALBIN)/cosign
@@ -62,7 +68,7 @@ help: ## Display the available make targets.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
 
 .PHONY: bootstrap
-bootstrap: kubebuilder controller-gen envtest kustomize golangci-lint govulncheck go-licenses actionlint kind helm ## Install pinned core development and CI tools into bin/.
+bootstrap: kubebuilder controller-gen envtest kustomize golangci-lint govulncheck go-licenses actionlint kind kubectl helm ## Install pinned core development and CI tools into bin/.
 
 ##@ Generation and quality
 
@@ -145,9 +151,9 @@ test-envtest: build setup-envtest ## Start a real envtest control plane and veri
 	$(GO) test -race -tags=integration ./test/integration -v
 
 .PHONY: test-kind
-test-kind: kind helm ## Run the Helm, admission, KEDA, fixture, and uninstall smoke suite on Kind.
+test-kind: kind kubectl helm ## Run the Helm, admission, KEDA, fixture, and uninstall smoke suite on Kind.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
-	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" KEDA_VERSION="$(KEDA_VERSION)" \
 	NFS_CSI_VERSION="$(NFS_CSI_VERSION)" NFS_SERVER_IMAGE="$(NFS_SERVER_IMAGE)" VERSION="$(VERSION)" \
 	E2E_STORAGE_SUITE="$(E2E_STORAGE_SUITE)" IMG="$(IMG)" \
@@ -158,16 +164,16 @@ test-e2e-storage: ## Run the artifact-plane storage resilience suite on a two-no
 	$(MAKE) test-kind E2E_STORAGE_SUITE=1
 
 .PHONY: test-e2e-huggingface
-test-e2e-huggingface: kind helm ## Run real Hugging Face import/recovery; private inputs use protected environment configuration.
+test-e2e-huggingface: kind kubectl helm ## Run real Hugging Face import/recovery; private inputs use protected environment configuration.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
-	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" VERSION="$(VERSION)" IMG="$(IMG)" \
 	IMPORTER_IMG="$(IMPORTER_IMG)" bash hack/test-e2e-huggingface.sh
 
 .PHONY: test-e2e-serving-cpu
-test-e2e-serving-cpu: kind helm ## Run real CPU llama.cpp serving and failure/drain acceptance on Kind.
+test-e2e-serving-cpu: kind kubectl helm ## Run real CPU llama.cpp serving and failure/drain acceptance on Kind.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
-	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" VERSION="$(VERSION)" IMG="$(IMG)" \
 	IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" RUNTIME_CPU_IMG="$(RUNTIME_CPU_IMG)" \
 	LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \
@@ -322,6 +328,21 @@ $(ACTIONLINT): | $(LOCALBIN)
 kind: $(KIND)
 $(KIND): | $(LOCALBIN)
 	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
+
+.PHONY: kubectl
+kubectl: $(KUBECTL_VERSIONED)
+	ln -sf "$$(basename "$(KUBECTL_VERSIONED)")" "$(KUBECTL_LOCAL)"
+
+$(KUBECTL_VERSIONED): | $(LOCALBIN)
+	@test -n "$(KUBECTL_VERSION)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
+	@test -n "$(KUBECTL_SHA256)" || { echo "unsupported kubectl architecture $(KUBECTL_ARCH)"; exit 2; }
+	@tmp="$@.tmp"; \
+		curl --fail --location --retry 5 --retry-all-errors --proto '=https' --tlsv1.2 \
+			--output "$$tmp" \
+			"https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$(KUBECTL_ARCH)/kubectl"; \
+		printf '%s  %s\n' "$(KUBECTL_SHA256)" "$$tmp" | sha256sum --check --strict; \
+		chmod 0755 "$$tmp"; \
+		mv "$$tmp" "$@"
 
 .PHONY: helm
 helm: $(HELM)

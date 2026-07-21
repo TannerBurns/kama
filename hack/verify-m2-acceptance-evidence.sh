@@ -145,7 +145,9 @@ verify_cpu() {
     '
   fi
 
-  assert_json kubernetes-version.json "expected Kubernetes API server minor" '
+  assert_json kubernetes-version.json "matching Kubernetes client and API server minor" '
+    .clientVersion.major == "1" and
+    (.clientVersion.minor | sub("[+]$"; "")) == $minor and
     .serverVersion.major == "1" and
     (.serverVersion.minor | sub("[+]$"; "")) == $minor
   ' --arg minor "${expected_kubernetes_minor#1.}"

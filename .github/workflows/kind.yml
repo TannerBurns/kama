@@ -88,7 +88,7 @@ jobs:
           KIND_CLUSTER: kama-${{ matrix.kubernetes }}
           KIND_NODE_IMAGE: ${{ matrix.node-image }}
           KEDA_VERSION: 2.20.0
-        run: make test-kind
+        run: make test-kind K8S_MINOR=${{ matrix.kubernetes }}
 
       - name: Run production CPU serving, failure, and drain acceptance
         env:
