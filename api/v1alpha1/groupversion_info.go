@@ -43,6 +43,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&ModelCacheList{},
 		&ModelArtifact{},
 		&ModelArtifactList{},
+		&ModelDeployment{},
+		&ModelDeploymentList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil

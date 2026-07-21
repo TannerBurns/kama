@@ -1,0 +1,181 @@
+name: Protected NVIDIA end-to-end
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-nvidia-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-target:
+    name: Require trusted main target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Reject untrusted workflow target
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "${EVENT_NAME} NVIDIA qualification must target refs/heads/main, got ${WORKFLOW_REF}" >&2
+            exit 1
+          fi
+
+  serving:
+    name: Baseline serving / one NVIDIA GPU
+    needs: validate-target
+    if: ${{ needs.validate-target.result == 'success' }}
+    runs-on: [self-hosted, Linux, X64, kama-nvidia]
+    timeout-minutes: 90
+    environment: e2e-nvidia
+    env:
+      E2E_EVIDENCE_DIR: dist/e2e/serving-nvidia
+      E2E_NVIDIA_NAMESPACE: kama-e2e-nvidia-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_NVIDIA_RELEASE: kama-e2e-nvidia-${{ github.run_id }}-${{ github.run_attempt }}
+      E2E_NVIDIA_MANAGER_IMAGE: ${{ vars.E2E_NVIDIA_MANAGER_IMAGE }}
+      E2E_NVIDIA_IMPORTER_IMAGE: ${{ vars.E2E_NVIDIA_IMPORTER_IMAGE }}
+      E2E_NVIDIA_FIXTURES_IMAGE: ${{ vars.E2E_NVIDIA_FIXTURES_IMAGE }}
+      E2E_NVIDIA_RUNTIME_CPU_IMAGE: ${{ vars.E2E_NVIDIA_RUNTIME_CPU_IMAGE }}
+      E2E_NVIDIA_RUNTIME_CUDA_IMAGE: ${{ vars.E2E_NVIDIA_RUNTIME_CUDA_IMAGE }}
+      E2E_NVIDIA_STORAGE_CLASS: ${{ vars.E2E_NVIDIA_STORAGE_CLASS }}
+      E2E_NVIDIA_DRIVER_VERSION: ${{ vars.E2E_NVIDIA_DRIVER_VERSION }}
+      E2E_NVIDIA_CUDA_VERSION: ${{ vars.E2E_NVIDIA_CUDA_VERSION }}
+      E2E_NVIDIA_EXPECTED_COMMIT: ${{ vars.E2E_NVIDIA_EXPECTED_COMMIT }}
+      E2E_NVIDIA_MODEL_REVISION: ${{ vars.E2E_NVIDIA_MODEL_REVISION }}
+      E2E_NVIDIA_MODEL_SHA256: ${{ vars.E2E_NVIDIA_MODEL_SHA256 }}
+      E2E_NVIDIA_MODEL_SIZE: ${{ vars.E2E_NVIDIA_MODEL_SIZE }}
+    steps:
+      - name: Validate immutable qualification commit
+        shell: bash
+        run: |
+          if [[ ! "${E2E_NVIDIA_EXPECTED_COMMIT}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "E2E_NVIDIA_EXPECTED_COMMIT must be a full lowercase commit SHA" >&2
+            exit 1
+          fi
+
+      - name: Check out trusted qualification source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ vars.E2E_NVIDIA_EXPECTED_COMMIT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require commit on trusted main history
+        shell: bash
+        run: |
+          checked_out_commit="$(git rev-parse HEAD)"
+          if [[ "${checked_out_commit}" != "${E2E_NVIDIA_EXPECTED_COMMIT}" ]]; then
+            echo "checkout ${checked_out_commit} does not match E2E_NVIDIA_EXPECTED_COMMIT" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${checked_out_commit}" origin/main; then
+            echo "qualification commit is not an ancestor of origin/main" >&2
+            exit 1
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned Helm and cosign
+        run: make helm cosign
+
+      - name: Materialize protected kubeconfig
+        id: kubeconfig
+        shell: bash
+        env:
+          KUBECONFIG_BASE64: ${{ secrets.KUBECONFIG_BASE64 }}
+        run: |
+          if [[ -z "${KUBECONFIG_BASE64}" ]]; then
+            echo "protected KUBECONFIG_BASE64 is required" >&2
+            exit 1
+          fi
+          umask 077
+          kubeconfig_path="$(mktemp "${RUNNER_TEMP}/kama-nvidia-kubeconfig.XXXXXX")"
+          echo "path=${kubeconfig_path}" >> "${GITHUB_OUTPUT}"
+          printf '%s' "${KUBECONFIG_BASE64}" | base64 --decode > "${kubeconfig_path}"
+          chmod 600 "${kubeconfig_path}"
+          echo "KUBECONFIG=${kubeconfig_path}" >> "${GITHUB_ENV}"
+
+      - name: Run protected NVIDIA serving suite
+        run: make test-e2e-serving-nvidia
+
+      - name: Remove protected kubeconfig
+        if: ${{ always() }}
+        shell: bash
+        env:
+          KUBECONFIG_PATH: ${{ steps.kubeconfig.outputs.path }}
+        run: |
+          if [[ -n "${KUBECONFIG_PATH}" ]]; then
+            chmod u+w "${KUBECONFIG_PATH}" 2>/dev/null || true
+            rm -f -- "${KUBECONFIG_PATH}"
+          fi
+
+      - name: Enforce redacted NVIDIA evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          evidence_dir="dist/e2e/serving-nvidia"
+          unsafe_list="$(mktemp "${RUNNER_TEMP}/kama-nvidia-unsafe.XXXXXX")"
+          trap 'rm -f -- "${unsafe_list}"' EXIT
+          if [[ -d "${evidence_dir}" ]]; then
+            grep -RIlE -i \
+              'authorization:|bearer[[:space:]]|hf_[a-z0-9]+|client-key-data:|client-certificate-data:|(^|[[:space:]])token:[[:space:]]|password[=:]' \
+              "${evidence_dir}" >"${unsafe_list}" 2>/dev/null || true
+          fi
+          if [[ -s "${unsafe_list}" ]]; then
+            while IFS= read -r unsafe_file; do
+              [[ "${unsafe_file}" == "${evidence_dir}/"* ]] || continue
+              rm -f -- "${unsafe_file}"
+            done <"${unsafe_list}"
+            if [[ -s "${evidence_dir}/qualification.json" ]]; then
+              jq '.qualifying = false | .credentialSafe = false | .evidenceComplete = false' \
+                "${evidence_dir}/qualification.json" >"${RUNNER_TEMP}/qualification.json"
+              mv "${RUNNER_TEMP}/qualification.json" "${evidence_dir}/qualification.json"
+            fi
+            echo "credential-shaped evidence was removed before artifact upload" >&2
+            exit 1
+          fi
+
+      - name: Require qualifying NVIDIA evidence
+        if: ${{ always() }}
+        env:
+          NVIDIA_E2E_EVIDENCE_DIR: dist/e2e/serving-nvidia
+          E2E_EXPECTED_COMMIT: ${{ vars.E2E_NVIDIA_EXPECTED_COMMIT }}
+        run: make verify-e2e-serving-nvidia-evidence
+
+      - name: Upload NVIDIA serving evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-serving-nvidia-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2e/serving-nvidia/
+          if-no-files-found: error
+          retention-days: 90
+
+  acceptance:
+    name: Protected NVIDIA acceptance gate
+    needs: [validate-target, serving]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require trusted target and qualifying hardware evidence
+        shell: bash
+        env:
+          TARGET_RESULT: ${{ needs.validate-target.result }}
+          SERVING_RESULT: ${{ needs.serving.result }}
+        run: |
+          if [[ "${TARGET_RESULT}" != "success" || "${SERVING_RESULT}" != "success" ]]; then
+            echo "protected NVIDIA acceptance failed: target=${TARGET_RESULT}, serving=${SERVING_RESULT}" >&2
+            exit 1
+          fi

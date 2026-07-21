@@ -72,6 +72,13 @@ spec:
             - --importer-image-pull-secrets={{ include "kama.importerImagePullSecrets" . }}
             {{- end }}
             - --hub-endpoint={{ .Values.importer.hubEndpoint }}
+            - --runtime-cpu-image={{ include "kama.runtimeCPUImage" . }}
+            - --runtime-cuda-image={{ include "kama.runtimeCUDAImage" . }}
+            - --runtime-image-pull-policy={{ .Values.runtime.imagePullPolicy }}
+            {{- if .Values.runtime.imagePullSecrets }}
+            - --runtime-image-pull-secrets={{ include "kama.runtimeImagePullSecrets" . }}
+            {{- end }}
+            - --llama-commit={{ .Values.runtime.llamaCommit }}
             {{- if .Values.webhook.enabled }}
             - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
             - --webhook-cert-name={{ .Values.webhook.tls.certName }}

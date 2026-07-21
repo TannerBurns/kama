@@ -56,7 +56,7 @@ jobs:
   kind:
     name: Kubernetes ${{ matrix.kubernetes }} / admission / KEDA 2.20
     runs-on: ubuntu-24.04
-    timeout-minutes: 50
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +71,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Go
@@ -87,4 +88,43 @@ jobs:
           KIND_CLUSTER: kama-${{ matrix.kubernetes }}
           KIND_NODE_IMAGE: ${{ matrix.node-image }}
           KEDA_VERSION: 2.20.0
-        run: make test-kind
+        run: make test-kind K8S_MINOR=${{ matrix.kubernetes }}
+
+      - name: Run production CPU serving, failure, and drain acceptance
+        env:
+          KIND_CLUSTER: kama-serving-${{ matrix.kubernetes }}-${{ github.run_id }}-${{ github.run_attempt }}
+          KIND_NODE_IMAGE: ${{ matrix.node-image }}
+          E2E_EVIDENCE_DIR: dist/e2e/serving-cpu-${{ matrix.kubernetes }}
+        run: make test-e2e-serving-cpu K8S_MINOR=${{ matrix.kubernetes }}
+
+      - name: Verify complete qualifying CPU evidence
+        env:
+          CPU_E2E_EVIDENCE_DIR: dist/e2e/serving-cpu-${{ matrix.kubernetes }}
+          E2E_EXPECTED_COMMIT: ${{ github.sha }}
+        run: make verify-e2e-serving-cpu-evidence K8S_MINOR=${{ matrix.kubernetes }}
+
+      - name: Upload CPU serving evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-serving-cpu-kubernetes-${{ matrix.kubernetes }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/e2e/serving-cpu-${{ matrix.kubernetes }}/
+          if-no-files-found: error
+          retention-days: 90
+
+  m2-cpu-acceptance:
+    name: M2 CPU/Kind acceptance
+    if: ${{ always() }}
+    needs:
+      - kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every Kubernetes matrix entry
+        env:
+          MATRIX_RESULT: ${{ needs.kind.result }}
+        run: |
+          if [[ "${MATRIX_RESULT}" != "success" ]]; then
+            echo "M2 CPU/Kind matrix result is ${MATRIX_RESULT}, want success" >&2
+            exit 1
+          fi

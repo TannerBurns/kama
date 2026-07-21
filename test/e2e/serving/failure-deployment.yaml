@@ -1,0 +1,19 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: e2e-serving-load-failure
+spec:
+  modelRef:
+    name: e2e-serving-failure-model
+  placement:
+    mode: CPU
+  runtime:
+    maxContextTokens: 2048
+    desiredConcurrency: 1
+    drainTimeout: 30s
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

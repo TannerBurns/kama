@@ -1,0 +1,19 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: e2e-serving-cpu
+spec:
+  modelRef:
+    name: e2e-serving-model
+  placement:
+    mode: CPU
+  runtime:
+    maxContextTokens: 2048
+    desiredConcurrency: 1
+    drainTimeout: 2m
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+    limits:
+      memory: 2Gi

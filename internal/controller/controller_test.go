@@ -46,6 +46,7 @@ const (
 	testImporterImage       = "example.invalid/kama-importer:test"
 	testHubEndpoint         = "https://huggingface.co"
 	testOperationID         = "operation"
+	testFingerprint         = "fingerprint"
 	cachedArtifactName      = "cached"
 	sharedCacheName         = "shared"
 )
@@ -864,7 +865,7 @@ func TestReleaseLeaseUsesUncachedAPIReader(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name, Namespace: namespace, UID: types.UID("lease-uid"), ResourceVersion: "1",
 			Labels: map[string]string{
-				managedByLabel: kamaName, componentLabel: artifactImportComponent, leaseFingerprintLabel: "fingerprint",
+				managedByLabel: kamaName, componentLabel: artifactImportComponent, leaseFingerprintLabel: testFingerprint,
 			},
 		},
 		Spec: coordinationv1.LeaseSpec{HolderIdentity: ptr(holder)},

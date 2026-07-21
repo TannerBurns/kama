@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: kama-e2e-serving-failure
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: kama-e2e-serving-failure
+  local:
+    path: /var/local/kama-e2e-serving-failure
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - KAMA_WORKER_NODE
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: e2e-serving-failure-model
+  namespace: kama-system
+spec:
+  storageClassName: kama-e2e-serving-failure
+  accessModes:
+    - ReadWriteOnce
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelArtifact
+metadata:
+  name: e2e-serving-failure-model
+  namespace: kama-system
+spec:
+  format: GGUF
+  entrypoint: smollm2-360m-instruct-q8_0.gguf
+  source:
+    persistentVolumeClaim:
+      claimName: e2e-serving-failure-model
+      rootPath: models
+      importPolicy: Direct

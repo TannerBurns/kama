@@ -26,6 +26,28 @@ importer:
   imagePullSecrets: []
   hubEndpoint: https://huggingface.co
 
+runtime:
+  cpu:
+    image:
+      repository: ghcr.io/tannerburns/kama-runtime-cpu
+      # Defaults to the chart appVersion when empty.
+      tag: ""
+      # When set, digest takes precedence over tag.
+      digest: ""
+  cuda:
+    image:
+      repository: ghcr.io/tannerburns/kama-runtime-cuda
+      # Defaults to the chart appVersion when empty.
+      tag: ""
+      # When set, digest takes precedence over tag.
+      digest: ""
+  imagePullPolicy: IfNotPresent
+  # Image pull Secrets copied to generated serving Pods. Entries may be names
+  # or objects with a name field.
+  imagePullSecrets: []
+  # The controller and both runtime images must agree on this exact build.
+  llamaCommit: af6528e6df5d798f7f1363ec1141699be0f638e2
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""

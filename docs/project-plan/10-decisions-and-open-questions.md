@@ -32,13 +32,15 @@ revisited through an ADR before their dependent milestone begins.
 | D020 | `Retain` is the default; adopted claims are never deleted, and `Delete` applies only to an unreferenced controller-created claim with matching ownership identity. | Prevents control-plane removal or a forged reference from deleting user data. |
 | D021 | One cluster-wide manager watches namespaced artifact resources and all object references remain same-namespace names. | Centralizes operation while preserving Kubernetes RBAC and tenant boundaries. |
 | D022 | The Helm release owns webhook TLS, preserves its CA across upgrades, refreshes the leaf, and installs fail-closed webhooks without requiring cert-manager. | Makes the default installation self-contained and maintains a stable admission trust root. |
+| D023 | M2 requires explicit `CPU` or one-full-NVIDIA-GPU `Accelerator` placement, a Kama-owned pinned llama.cpp runtime, and a typed hard runtime envelope. | Establishes reproducible single-replica serving without implementing the M3 planner or permitting unsafe raw arguments; accepted by [ADR-0005](../adr/0005-baseline-serving-runtime.md). |
+| D024 | M2 defaults to model-native context at concurrency one, `f16` K/V caches, batch 2048, micro-batch 512, automatic flash attention, and a ten-minute drain timeout. | Freezes the baseline API defaults and requires explicit per-request context for higher concurrency; accepted by [ADR-0005](../adr/0005-baseline-serving-runtime.md). |
+| D025 | M2 disables llama.cpp's independent RAM prompt cache, validates the loaded child through read-only properties, and admits accelerator readiness only for one visible CUDA device with full layer offload. | Keeps the hard memory/runtime envelope observable and prevents a mismatched child or implicit hybrid placement from qualifying; accepted by [ADR-0005](../adr/0005-baseline-serving-runtime.md). |
 
 ## Assumed implementation defaults
 
 | ID | Default | Revisit by |
 |---|---|---|
 | A001 | Use a Kama KEDA external scaler, not the KEDA HTTP add-on or Prometheus scaler. | M5 design freeze |
-| A002 | Expose high-level runtime intent with guarded expert overrides. | M2 API freeze |
 | A003 | Context, desired concurrency, KV precision, and artifact quantization are hard constraints; never silently shrink them. | M3 planner freeze |
 | A004 | Use `split-mode=layer` for production same-node multi-GPU; tensor mode is feature-gated and profile-only. | M3 hardware validation |
 | A006 | Queue defaults: 100 requests per model, 10-minute cold-start timeout, 10-minute idle cooldown; all are configurable. | M4/M5 load testing |
@@ -62,7 +64,7 @@ their original validation IDs remain traceable.
 
 | ID | Item | Default until resolved | Blocking milestone |
 |---|---|---|---|
-| O003 | Default context, concurrency, KV types, queue body limit, and placement timeout. | Use conservative runtime defaults; publish measured tuning before beta. | M2-M5 |
+| O003 | Gateway queue body limit and automatic-placement timeout. M2 context, concurrency, KV types, batching, flash-attention, and drain defaults are resolved by ADR-0005. | Use bounded conservative values and publish measured tuning before beta. | M4-M5 |
 | O006 | Preconfigured MIG resources in v1. | Full GPUs only in the support claim; do not dynamically reconfigure MIG. | M3/beta |
 | O007 | Exact public llama-server endpoint matrix. | Start with OpenAI chat/completions/embeddings/responses and selected native inference routes, then pin through conformance tests. | M4 |
 | O008 | Maximum acceptable planner estimate error and gateway overhead. | Establish baselines on reference hardware and turn them into beta thresholds. | M3/M6 |

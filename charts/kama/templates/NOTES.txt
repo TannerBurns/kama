@@ -8,6 +8,10 @@ Run the chart smoke test:
 
   helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
 
-Create a ModelCache and ModelArtifact from the examples directory, then inspect them:
+Create a ModelCache, ModelArtifact, and ModelDeployment from the examples directory, then inspect them:
 
-  kubectl get modelcaches,modelartifacts -A
+  kubectl get modelcaches,modelartifacts,modeldeployments -A
+
+Before the next Helm upgrade, server-side apply the CRDs from that exact chart
+package and wait for all definitions to become Established. Helm does not upgrade
+or roll back CRD schemas; see charts/kama/README.md.

@@ -1,0 +1,20 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: e2e-serving-nvidia
+spec:
+  modelRef:
+    name: e2e-serving-nvidia-model
+  placement:
+    mode: Accelerator
+    acceleratorResource: nvidia.com/gpu
+  runtime:
+    maxContextTokens: 2048
+    desiredConcurrency: 1
+    drainTimeout: 2m
+  resources:
+    requests:
+      cpu: "1"
+      memory: 512Mi
+    limits:
+      memory: 2Gi

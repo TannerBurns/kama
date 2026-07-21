@@ -67,6 +67,10 @@ spec:
           - --importer-image=ghcr.io/tannerburns/kama-importer:0.1.0-dev.0
           - --importer-image-pull-policy=IfNotPresent
           - --hub-endpoint=https://huggingface.co
+          - --runtime-cpu-image=ghcr.io/tannerburns/kama-runtime-cpu:0.1.0-dev.0
+          - --runtime-cuda-image=ghcr.io/tannerburns/kama-runtime-cuda:0.1.0-dev.0
+          - --runtime-image-pull-policy=IfNotPresent
+          - --llama-commit=af6528e6df5d798f7f1363ec1141699be0f638e2
         image: ghcr.io/tannerburns/kama-manager:0.1.0-dev.0
         name: manager
         ports:

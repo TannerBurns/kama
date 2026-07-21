@@ -18,7 +18,12 @@ REGISTRY ?= ghcr.io/tannerburns
 IMG ?= $(REGISTRY)/kama-manager:$(VERSION)
 IMPORTER_IMG ?= $(REGISTRY)/kama-importer:$(VERSION)
 FIXTURES_IMG ?= $(REGISTRY)/kama-test-fixtures:$(VERSION)
+RUNTIME_CPU_IMG ?= $(REGISTRY)/kama-runtime-cpu:$(VERSION)
+RUNTIME_CUDA_IMG ?= $(REGISTRY)/kama-runtime-cuda:$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
+RUNTIME_CPU_PLATFORMS ?= linux/amd64,linux/arm64
+RUNTIME_CUDA_PLATFORMS ?= linux/amd64
+RUNTIME_CUDA_ARCHITECTURES ?= 60;61;70;75;80;86;89;90
 CONTAINER_TOOL ?= docker
 LOCALBIN ?= $(CURDIR)/bin
 DIST ?= $(CURDIR)/dist
@@ -26,6 +31,13 @@ COPYRIGHT_YEAR ?= 2026
 K8S_MINOR ?= 1.36
 KIND_CLUSTER ?= kama-$(subst .,-,$(K8S_MINOR))
 KIND_NODE_IMAGE ?= $(KIND_NODE_IMAGE_$(K8S_MINOR))
+KUBECTL_VERSION ?= $(KUBECTL_VERSION_$(K8S_MINOR))
+KUBECTL_ARCH ?= $(shell uname -m | sed -e 's/^x86_64$$/amd64/' -e 's/^aarch64$$/arm64/')
+KUBECTL_SHA256 ?= $(KUBECTL_SHA256_$(K8S_MINOR)_$(KUBECTL_ARCH))
+CPU_E2E_EVIDENCE_DIR ?= $(DIST)/e2e/serving-cpu
+NVIDIA_E2E_EVIDENCE_DIR ?= $(DIST)/e2e/serving-nvidia
+E2E_EXPECTED_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || printf unknown)
+E2E_REQUIRE_QUALIFYING ?= 1
 
 GO ?= go
 GOFLAGS ?=
@@ -40,6 +52,9 @@ GOVULNCHECK := $(LOCALBIN)/govulncheck
 GO_LICENSES := $(LOCALBIN)/go-licenses
 ACTIONLINT := $(LOCALBIN)/actionlint
 KIND := $(LOCALBIN)/kind
+KUBECTL_LOCAL := $(LOCALBIN)/kubectl
+KUBECTL ?= $(KUBECTL_LOCAL)
+KUBECTL_VERSIONED := $(LOCALBIN)/kubectl-$(KUBECTL_VERSION)-linux-$(KUBECTL_ARCH)
 HELM := $(LOCALBIN)/helm
 SYFT := $(LOCALBIN)/syft
 COSIGN := $(LOCALBIN)/cosign
@@ -54,12 +69,12 @@ help: ## Display the available make targets.
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[a-zA-Z_0-9-]+:.*?##/ { printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2 } /^##@/ { printf "\n\033[1m%s\033[0m\n", substr($$0, 5) }' $(MAKEFILE_LIST)
 
 .PHONY: bootstrap
-bootstrap: kubebuilder controller-gen envtest kustomize golangci-lint govulncheck go-licenses actionlint kind helm ## Install pinned core development and CI tools into bin/.
+bootstrap: kubebuilder controller-gen envtest kustomize golangci-lint govulncheck go-licenses actionlint kind kubectl helm ## Install pinned core development and CI tools into bin/.
 
 ##@ Generation and quality
 
 .PHONY: manifests
-manifests: controller-gen ## Generate artifact-plane RBAC, webhook, and CRD manifests.
+manifests: controller-gen ## Generate Kama RBAC, webhook, and CRD manifests.
 	@mkdir -p config/crd/bases config/rbac config/webhook charts/kama/crds
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd webhook \
 		'paths=./api/...;./internal/controller/...' \
@@ -70,6 +85,8 @@ manifests: controller-gen ## Generate artifact-plane RBAC, webhook, and CRD mani
 		charts/kama/crds/kama.tannerburns.github.io_modelcaches.yaml
 	install -m 0644 config/crd/bases/kama.tannerburns.github.io_modelartifacts.yaml \
 		charts/kama/crds/kama.tannerburns.github.io_modelartifacts.yaml
+	install -m 0644 config/crd/bases/kama.tannerburns.github.io_modeldeployments.yaml \
+		charts/kama/crds/kama.tannerburns.github.io_modeldeployments.yaml
 
 .PHONY: generate
 generate: controller-gen ## Generate Go API helpers.
@@ -135,9 +152,9 @@ test-envtest: build setup-envtest ## Start a real envtest control plane and veri
 	$(GO) test -race -tags=integration ./test/integration -v
 
 .PHONY: test-kind
-test-kind: kind helm ## Run the Helm, admission, KEDA, fixture, and uninstall smoke suite on Kind.
+test-kind: kind kubectl helm ## Run the Helm, admission, KEDA, fixture, and uninstall smoke suite on Kind.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
-	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" KEDA_VERSION="$(KEDA_VERSION)" \
 	NFS_CSI_VERSION="$(NFS_CSI_VERSION)" NFS_SERVER_IMAGE="$(NFS_SERVER_IMAGE)" VERSION="$(VERSION)" \
 	E2E_STORAGE_SUITE="$(E2E_STORAGE_SUITE)" IMG="$(IMG)" \
@@ -148,11 +165,39 @@ test-e2e-storage: ## Run the artifact-plane storage resilience suite on a two-no
 	$(MAKE) test-kind E2E_STORAGE_SUITE=1
 
 .PHONY: test-e2e-huggingface
-test-e2e-huggingface: kind helm ## Run real Hugging Face import/recovery; private inputs use protected environment configuration.
+test-e2e-huggingface: kind kubectl helm ## Run real Hugging Face import/recovery; private inputs use protected environment configuration.
 	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
-	KIND="$(KIND)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
 	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" VERSION="$(VERSION)" IMG="$(IMG)" \
 	IMPORTER_IMG="$(IMPORTER_IMG)" bash hack/test-e2e-huggingface.sh
+
+.PHONY: test-e2e-serving-cpu
+test-e2e-serving-cpu: kind kubectl helm ## Run real CPU llama.cpp serving and failure/drain acceptance on Kind.
+	@test -n "$(KIND_NODE_IMAGE)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
+	KIND="$(KIND)" KUBECTL="$(KUBECTL)" HELM="$(HELM)" K8S_MINOR="$(K8S_MINOR)" KIND_CLUSTER="$(KIND_CLUSTER)" \
+	KIND_NODE_IMAGE="$(KIND_NODE_IMAGE)" VERSION="$(VERSION)" IMG="$(IMG)" \
+	IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" RUNTIME_CPU_IMG="$(RUNTIME_CPU_IMG)" \
+	LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \
+	LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" bash hack/test-e2e-serving-cpu.sh
+
+.PHONY: test-e2e-serving-nvidia
+test-e2e-serving-nvidia: ## Run protected one-NVIDIA-GPU serving acceptance against KUBECONFIG.
+	VERSION="$(VERSION)" IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" \
+	RUNTIME_CPU_IMG="$(RUNTIME_CPU_IMG)" RUNTIME_CUDA_IMG="$(RUNTIME_CUDA_IMG)" \
+	LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \
+	bash hack/test-e2e-serving-nvidia.sh
+
+.PHONY: verify-e2e-serving-cpu-evidence
+verify-e2e-serving-cpu-evidence: ## Validate retained CPU serving evidence against every M2 CPU acceptance criterion.
+	E2E_REQUIRE_QUALIFYING="$(E2E_REQUIRE_QUALIFYING)" \
+		bash hack/verify-m2-acceptance-evidence.sh cpu "$(CPU_E2E_EVIDENCE_DIR)" \
+		"$(E2E_EXPECTED_COMMIT)" "$(K8S_MINOR)"
+
+.PHONY: verify-e2e-serving-nvidia-evidence
+verify-e2e-serving-nvidia-evidence: ## Validate retained NVIDIA serving evidence against every M2 GPU acceptance criterion.
+	E2E_REQUIRE_QUALIFYING="$(E2E_REQUIRE_QUALIFYING)" \
+		bash hack/verify-m2-acceptance-evidence.sh nvidia "$(NVIDIA_E2E_EVIDENCE_DIR)" \
+		"$(E2E_EXPECTED_COMMIT)"
 
 ##@ Build and packaging
 
@@ -164,6 +209,8 @@ build: ## Build the manager, importer, and test fixture binaries.
 	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/fake-llama-server" ./cmd/fake-llama-server
 	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/fake-huggingface-server" ./cmd/fake-huggingface-server
 	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/external-scaler" ./cmd/external-scaler
+	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS)" -o "$(LOCALBIN)/serving-test-client" ./cmd/serving-test-client
+	$(GO) build $(GOFLAGS) -trimpath -ldflags "$(LDFLAGS) -X $(MODULE)/internal/runtime.LlamaCPPCommit=$(LLAMA_CPP_COMMIT) -X $(MODULE)/internal/runtime.LlamaCPPBuildNumber=$(LLAMA_CPP_BUILD_NUMBER)" -o "$(LOCALBIN)/kama-runtime-supervisor" ./cmd/runtime-supervisor
 
 .PHONY: run
 run: ## Run the empty manager against the current kubeconfig.
@@ -174,12 +221,28 @@ container: ## Build versioned manager, importer, and test-fixture container imag
 	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" -t "$(IMG)" -f Dockerfile .
 	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" -t "$(IMPORTER_IMG)" -f Dockerfile.importer .
 	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" -t "$(FIXTURES_IMG)" -f Dockerfile.test-fixtures .
+	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" --build-arg LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" \
+		--build-arg LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" --build-arg LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" \
+		-t "$(RUNTIME_CPU_IMG)" -f Dockerfile.runtime-cpu .
+	$(CONTAINER_TOOL) build --build-arg VERSION="$(VERSION)" --build-arg LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" \
+		--build-arg LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" --build-arg LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" \
+		--build-arg CUDA_ARCHITECTURES="$(RUNTIME_CUDA_ARCHITECTURES)" \
+		-t "$(RUNTIME_CUDA_IMG)" -f Dockerfile.runtime-cuda .
 
 .PHONY: container-multiarch
 container-multiarch: ## Build and push multi-architecture images (release workflow only).
 	$(CONTAINER_TOOL) buildx build --push --platform "$(PLATFORMS)" --build-arg VERSION="$(VERSION)" -t "$(IMG)" -f Dockerfile .
 	$(CONTAINER_TOOL) buildx build --push --platform "$(PLATFORMS)" --build-arg VERSION="$(VERSION)" -t "$(IMPORTER_IMG)" -f Dockerfile.importer .
 	$(CONTAINER_TOOL) buildx build --push --platform "$(PLATFORMS)" --build-arg VERSION="$(VERSION)" -t "$(FIXTURES_IMG)" -f Dockerfile.test-fixtures .
+	$(CONTAINER_TOOL) buildx build --push --platform "$(RUNTIME_CPU_PLATFORMS)" --build-arg VERSION="$(VERSION)" \
+		--build-arg LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" --build-arg LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \
+		--build-arg LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" \
+		-t "$(RUNTIME_CPU_IMG)" -f Dockerfile.runtime-cpu .
+	$(CONTAINER_TOOL) buildx build --push --platform "$(RUNTIME_CUDA_PLATFORMS)" --build-arg VERSION="$(VERSION)" \
+		--build-arg LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" --build-arg LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \
+		--build-arg LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" \
+		--build-arg CUDA_ARCHITECTURES="$(RUNTIME_CUDA_ARCHITECTURES)" \
+		-t "$(RUNTIME_CUDA_IMG)" -f Dockerfile.runtime-cuda .
 
 .PHONY: helm-validate
 helm-validate: helm ## Lint and render the chart for every supported Kubernetes minor.
@@ -199,6 +262,8 @@ sbom: syft ## Generate SPDX JSON SBOMs for all local images.
 	"$(SYFT)" "docker:$(IMG)" -o "spdx-json=$(DIST)/sbom/kama-manager.spdx.json"
 	"$(SYFT)" "docker:$(IMPORTER_IMG)" -o "spdx-json=$(DIST)/sbom/kama-importer.spdx.json"
 	"$(SYFT)" "docker:$(FIXTURES_IMG)" -o "spdx-json=$(DIST)/sbom/kama-test-fixtures.spdx.json"
+	"$(SYFT)" "docker:$(RUNTIME_CPU_IMG)" -o "spdx-json=$(DIST)/sbom/kama-runtime-cpu.spdx.json"
+	"$(SYFT)" "docker:$(RUNTIME_CUDA_IMG)" -o "spdx-json=$(DIST)/sbom/kama-runtime-cuda.spdx.json"
 
 .PHONY: sign
 sign: cosign ## Sign an immutable OCI reference supplied as IMAGE_DIGEST.
@@ -207,7 +272,8 @@ sign: cosign ## Sign an immutable OCI reference supplied as IMAGE_DIGEST.
 
 .PHONY: release-check
 release-check: build helm-package ## Verify VERSION, binaries, Dockerfile pins, and packaged chart metadata agree.
-	CHECK_BINARY=1 VERSION="$(VERSION)" IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" HELM="$(HELM)" DIST="$(DIST)" bash hack/release-check.sh
+	CHECK_BINARY=1 VERSION="$(VERSION)" IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" \
+	RUNTIME_CPU_IMG="$(RUNTIME_CPU_IMG)" RUNTIME_CUDA_IMG="$(RUNTIME_CUDA_IMG)" HELM="$(HELM)" DIST="$(DIST)" bash hack/release-check.sh
 
 .PHONY: verify
 verify: fmt-check vet lint test test-envtest vuln-check license-check workflow-check helm-validate release-check verify-generated ## Run all non-container verification gates.
@@ -265,6 +331,21 @@ $(ACTIONLINT): | $(LOCALBIN)
 kind: $(KIND)
 $(KIND): | $(LOCALBIN)
 	$(call go-install-tool,$(KIND),sigs.k8s.io/kind,$(KIND_VERSION))
+
+.PHONY: kubectl
+kubectl: $(KUBECTL_VERSIONED)
+	ln -sf "$$(basename "$(KUBECTL_VERSIONED)")" "$(KUBECTL_LOCAL)"
+
+$(KUBECTL_VERSIONED): | $(LOCALBIN)
+	@test -n "$(KUBECTL_VERSION)" || { echo "unsupported K8S_MINOR=$(K8S_MINOR)"; exit 2; }
+	@test -n "$(KUBECTL_SHA256)" || { echo "unsupported kubectl architecture $(KUBECTL_ARCH)"; exit 2; }
+	@tmp="$@.tmp"; \
+		curl --fail --location --retry 5 --retry-all-errors --proto '=https' --tlsv1.2 \
+			--output "$$tmp" \
+			"https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$(KUBECTL_ARCH)/kubectl"; \
+		printf '%s  %s\n' "$(KUBECTL_SHA256)" "$$tmp" | sha256sum --check --strict; \
+		chmod 0755 "$$tmp"; \
+		mv "$$tmp" "$@"
 
 .PHONY: helm
 helm: $(HELM)

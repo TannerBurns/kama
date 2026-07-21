@@ -70,6 +70,7 @@ func main() {
 	var enableWebhooks bool
 	var showVersion bool
 	var importerImage, importerPullPolicy, importerPullSecrets, hubEndpoint string
+	var runtimeCPUImage, runtimeCUDAImage, runtimePullPolicy, runtimePullSecrets, llamaCommit string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -98,6 +99,16 @@ func main() {
 		"Comma-separated image pull Secret names copied to artifact Job Pods.")
 	flag.StringVar(&hubEndpoint, "hub-endpoint", "https://huggingface.co",
 		"Cluster-admin configured Hugging Face Hub endpoint used by importer Jobs.")
+	flag.StringVar(&runtimeCPUImage, "runtime-cpu-image", "ghcr.io/tannerburns/kama-runtime-cpu:dev",
+		"Controller-owned CPU llama.cpp runtime image.")
+	flag.StringVar(&runtimeCUDAImage, "runtime-cuda-image", "ghcr.io/tannerburns/kama-runtime-cuda:dev",
+		"Controller-owned single-GPU CUDA llama.cpp runtime image.")
+	flag.StringVar(&runtimePullPolicy, "runtime-image-pull-policy", string(corev1.PullIfNotPresent),
+		"Image pull policy used by ModelDeployment Pods.")
+	flag.StringVar(&runtimePullSecrets, "runtime-image-pull-secrets", "",
+		"Comma-separated image pull Secret names copied to ModelDeployment Pods.")
+	flag.StringVar(&llamaCommit, "llama-commit", "af6528e6df5d798f7f1363ec1141699be0f638e2",
+		"Full pinned llama.cpp source commit contained in the runtime images.")
 	flag.BoolVar(&showVersion, "version", false, "Print the Kama version and exit.")
 	opts := zap.Options{
 		Development: false,
@@ -223,6 +234,20 @@ func main() {
 		setupLog.Error(err, "Failed to set up ModelArtifact controller")
 		os.Exit(1)
 	}
+	runtimeOptions, err := buildRuntimeOptions(
+		runtimeCPUImage, runtimeCUDAImage, runtimePullPolicy, runtimePullSecrets, llamaCommit,
+	)
+	if err != nil {
+		setupLog.Error(err, "Invalid runtime configuration")
+		os.Exit(1)
+	}
+	if err := artifactcontroller.NewModelDeploymentReconciler(
+		mgr.GetClient(), mgr.GetAPIReader(), mgr.GetScheme(),
+		mgr.GetEventRecorder("modeldeployment-controller"), runtimeOptions,
+	).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to set up ModelDeployment controller")
+		os.Exit(1)
+	}
 	if enableWebhooks {
 		if err := kamav1alpha1.SetupModelCacheWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to set up ModelCache webhook")
@@ -230,6 +255,10 @@ func main() {
 		}
 		if err := kamav1alpha1.SetupModelArtifactWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to set up ModelArtifact webhook")
+			os.Exit(1)
+		}
+		if err := kamav1alpha1.SetupModelDeploymentWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to set up ModelDeployment webhook")
 			os.Exit(1)
 		}
 	}
@@ -282,4 +311,24 @@ func buildImporterOptions(
 		}
 	}
 	return options, nil
+}
+
+func buildRuntimeOptions(
+	cpuImage, cudaImage, pullPolicy, pullSecrets, llamaCommit string,
+) (artifactcontroller.RuntimeOptions, error) {
+	policy := corev1.PullPolicy(pullPolicy)
+	switch policy {
+	case corev1.PullAlways, corev1.PullIfNotPresent, corev1.PullNever:
+	default:
+		return artifactcontroller.RuntimeOptions{}, fmt.Errorf("unsupported runtime image pull policy %q", pullPolicy)
+	}
+	options := artifactcontroller.RuntimeOptions{
+		CPUImage: cpuImage, CUDAImage: cudaImage, PullPolicy: policy, LlamaCommit: llamaCommit,
+	}
+	for name := range strings.SplitSeq(pullSecrets, ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			options.ImagePullSecrets = append(options.ImagePullSecrets, corev1.LocalObjectReference{Name: name})
+		}
+	}
+	return options, options.Validate()
 }

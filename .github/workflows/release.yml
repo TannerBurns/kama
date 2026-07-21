@@ -15,7 +15,7 @@ jobs:
   publish:
     name: Publish signed OCI artifacts
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 360
     permissions:
       contents: read
       id-token: write
@@ -24,6 +24,8 @@ jobs:
       MANAGER_IMAGE: ghcr.io/tannerburns/kama-manager
       IMPORTER_IMAGE: ghcr.io/tannerburns/kama-importer
       FIXTURES_IMAGE: ghcr.io/tannerburns/kama-test-fixtures
+      RUNTIME_CPU_IMAGE: ghcr.io/tannerburns/kama-runtime-cpu
+      RUNTIME_CUDA_IMAGE: ghcr.io/tannerburns/kama-runtime-cuda
       CHART_REPOSITORY: ghcr.io/tannerburns/charts
     steps:
       - name: Check out source
@@ -57,10 +59,16 @@ jobs:
           fi
           created="$(git show -s --format=%cI HEAD)"
           epoch="$(git show -s --format=%ct HEAD)"
+          llama_commit="$(awk '$1 == "LLAMA_CPP_COMMIT" {print $3}' hack/versions.mk)"
+          llama_build_number="$(awk '$1 == "LLAMA_CPP_BUILD_NUMBER" {print $3}' hack/versions.mk)"
+          llama_source_sha256="$(awk '$1 == "LLAMA_CPP_SOURCE_SHA256" {print $3}' hack/versions.mk)"
           {
             echo "version=${version}"
             echo "created=${created}"
             echo "epoch=${epoch}"
+            echo "llama_commit=${llama_commit}"
+            echo "llama_build_number=${llama_build_number}"
+            echo "llama_source_sha256=${llama_source_sha256}"
           } >> "${GITHUB_OUTPUT}"
           RELEASE_TAG="${GITHUB_REF_NAME}" make release-check
 
@@ -119,6 +127,109 @@ jobs:
             SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
           provenance: mode=max
 
+      - name: Build and publish CPU runtime image
+        id: runtime-cpu
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.runtime-cpu
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.RUNTIME_CPU_IMAGE }}:${{ steps.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
+            LLAMA_CPP_COMMIT=${{ steps.metadata.outputs.llama_commit }}
+            LLAMA_CPP_BUILD_NUMBER=${{ steps.metadata.outputs.llama_build_number }}
+            LLAMA_CPP_SOURCE_SHA256=${{ steps.metadata.outputs.llama_source_sha256 }}
+          provenance: mode=max
+
+      - name: Build and publish CUDA runtime image
+        id: runtime-cuda
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.runtime-cuda
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.RUNTIME_CUDA_IMAGE }}:${{ steps.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.metadata.outputs.version }}
+            VCS_REF=${{ github.sha }}
+            CREATED=${{ steps.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
+            LLAMA_CPP_COMMIT=${{ steps.metadata.outputs.llama_commit }}
+            LLAMA_CPP_BUILD_NUMBER=${{ steps.metadata.outputs.llama_build_number }}
+            LLAMA_CPP_SOURCE_SHA256=${{ steps.metadata.outputs.llama_source_sha256 }}
+          provenance: mode=max
+
+      - name: Validate published runtime manifests and binaries
+        shell: bash
+        run: |
+          manager_ref="${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}"
+          importer_ref="${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}"
+          fixtures_ref="${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}"
+          runtime_cpu_ref="${RUNTIME_CPU_IMAGE}@${{ steps.runtime-cpu.outputs.digest }}"
+          runtime_cuda_ref="${RUNTIME_CUDA_IMAGE}@${{ steps.runtime-cuda.outputs.digest }}"
+
+          cpu_platforms="$(docker buildx imagetools inspect --raw "${runtime_cpu_ref}" | jq -c \
+            '[.manifests[].platform | select(.os == "linux") | (.os + "/" + .architecture)] | unique | sort')"
+          cuda_platforms="$(docker buildx imagetools inspect --raw "${runtime_cuda_ref}" | jq -c \
+            '[.manifests[].platform | select(.os == "linux") | (.os + "/" + .architecture)] | unique | sort')"
+          if [[ "${cpu_platforms}" != '["linux/amd64","linux/arm64"]' ]]; then
+            echo "published CPU runtime platforms are ${cpu_platforms}" >&2
+            exit 1
+          fi
+          if [[ "${cuda_platforms}" != '["linux/amd64"]' ]]; then
+            echo "published CUDA runtime platforms are ${cuda_platforms}" >&2
+            exit 1
+          fi
+
+          for ref in "${manager_ref}" "${importer_ref}" "${fixtures_ref}" \
+            "${runtime_cpu_ref}" "${runtime_cuda_ref}"; do
+            docker pull --platform linux/amd64 "${ref}"
+          done
+          CHECK_IMAGES=1 \
+            IMG="${manager_ref}" \
+            IMPORTER_IMG="${importer_ref}" \
+            FIXTURES_IMG="${fixtures_ref}" \
+            RUNTIME_CPU_IMG="${runtime_cpu_ref}" \
+            RUNTIME_CUDA_IMG="${runtime_cuda_ref}" \
+            bash hack/release-check.sh
+
+          expected_llama_version="version: ${{ steps.metadata.outputs.llama_build_number }} (${{ steps.metadata.outputs.llama_commit }})"
+          if ! llama_version="$(docker run --rm --platform linux/amd64 \
+            --entrypoint /usr/local/bin/llama-server "${runtime_cpu_ref}" --version 2>&1)"; then
+            echo "published CPU runtime ${runtime_cpu_ref} could not execute llama-server --version" >&2
+            printf '%s\n' "${llama_version}" >&2
+            exit 1
+          fi
+          if ! grep -Fq "${expected_llama_version}" <<<"${llama_version}"; then
+            echo "published CPU runtime ${runtime_cpu_ref} has unexpected llama-server identity" >&2
+            printf '%s\n' "${llama_version}" >&2
+            exit 1
+          fi
+
+          docker pull --platform linux/arm64 "${runtime_cpu_ref}"
+          arm64_supervisor_version="$(docker run --rm --platform linux/arm64 "${runtime_cpu_ref}" --version)"
+          if [[ "${arm64_supervisor_version}" != "${{ steps.metadata.outputs.version }}" ]]; then
+            echo "published arm64 CPU supervisor version is ${arm64_supervisor_version}" >&2
+            exit 1
+          fi
+          if ! arm64_llama_version="$(docker run --rm --platform linux/arm64 \
+            --entrypoint /usr/local/bin/llama-server "${runtime_cpu_ref}" --version 2>&1)"; then
+            echo "published arm64 CPU runtime could not execute llama-server --version" >&2
+            printf '%s\n' "${arm64_llama_version}" >&2
+            exit 1
+          fi
+          if ! grep -Fq "${expected_llama_version}" <<<"${arm64_llama_version}"; then
+            echo "published arm64 CPU runtime has unexpected llama-server identity" >&2
+            printf '%s\n' "${arm64_llama_version}" >&2
+            exit 1
+          fi
+
       - name: Package and publish Helm chart
         id: chart
         shell: bash
@@ -136,6 +247,26 @@ jobs:
           fi
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
+      - name: Record immutable release values
+        shell: bash
+        run: |
+          mkdir -p dist/release
+          jq -n \
+            --arg managerDigest "${{ steps.manager.outputs.digest }}" \
+            --arg importerDigest "${{ steps.importer.outputs.digest }}" \
+            --arg runtimeCPUDigest "${{ steps.runtime-cpu.outputs.digest }}" \
+            --arg runtimeCUDADigest "${{ steps.runtime-cuda.outputs.digest }}" '{
+              image: {repository: "ghcr.io/tannerburns/kama-manager", digest: $managerDigest},
+              importer: {image: {repository: "ghcr.io/tannerburns/kama-importer", digest: $importerDigest}},
+              runtime: {
+                cpu: {image: {repository: "ghcr.io/tannerburns/kama-runtime-cpu", digest: $runtimeCPUDigest}},
+                cuda: {image: {repository: "ghcr.io/tannerburns/kama-runtime-cuda", digest: $runtimeCUDADigest}}
+              }
+            }' >dist/release/immutable-values.json
+          ./bin/helm template kama "dist/kama-${{ steps.metadata.outputs.version }}.tgz" \
+            --namespace kama-system \
+            --values dist/release/immutable-values.json >/dev/null
+
       - name: Generate SPDX SBOMs
         shell: bash
         run: |
@@ -146,6 +277,10 @@ jobs:
             --output spdx-json=dist/sbom/kama-importer.spdx.json
           ./bin/syft "registry:${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}" \
             --output spdx-json=dist/sbom/kama-test-fixtures.spdx.json
+          ./bin/syft "registry:${RUNTIME_CPU_IMAGE}@${{ steps.runtime-cpu.outputs.digest }}" \
+            --output spdx-json=dist/sbom/kama-runtime-cpu.spdx.json
+          ./bin/syft "registry:${RUNTIME_CUDA_IMAGE}@${{ steps.runtime-cuda.outputs.digest }}" \
+            --output spdx-json=dist/sbom/kama-runtime-cuda.spdx.json
           ./bin/syft "file:dist/kama-${{ steps.metadata.outputs.version }}.tgz" \
             --output spdx-json=dist/sbom/kama-chart.spdx.json
 
@@ -157,16 +292,22 @@ jobs:
           manager_ref="${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}"
           importer_ref="${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}"
           fixtures_ref="${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}"
+          runtime_cpu_ref="${RUNTIME_CPU_IMAGE}@${{ steps.runtime-cpu.outputs.digest }}"
+          runtime_cuda_ref="${RUNTIME_CUDA_IMAGE}@${{ steps.runtime-cuda.outputs.digest }}"
           chart_ref="${CHART_REPOSITORY}/kama@${{ steps.chart.outputs.digest }}"
 
           ./bin/cosign sign "${manager_ref}"
           ./bin/cosign sign "${importer_ref}"
           ./bin/cosign sign "${fixtures_ref}"
+          ./bin/cosign sign "${runtime_cpu_ref}"
+          ./bin/cosign sign "${runtime_cuda_ref}"
           ./bin/cosign sign "${chart_ref}"
 
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-manager.spdx.json "${manager_ref}"
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-importer.spdx.json "${importer_ref}"
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-test-fixtures.spdx.json "${fixtures_ref}"
+          ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-runtime-cpu.spdx.json "${runtime_cpu_ref}"
+          ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-runtime-cuda.spdx.json "${runtime_cuda_ref}"
           ./bin/cosign attest --type spdxjson --predicate dist/sbom/kama-chart.spdx.json "${chart_ref}"
 
       - name: Upload release evidence
@@ -175,6 +316,7 @@ jobs:
           name: release-${{ steps.metadata.outputs.version }}
           path: |
             dist/kama-*.tgz
+            dist/release/immutable-values.json
             dist/sbom/*.spdx.json
           if-no-files-found: error
           retention-days: 90

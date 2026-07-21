@@ -1,0 +1,19 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: smollm2-cpu
+spec:
+  modelRef:
+    name: smollm2-360m-instruct
+  placement:
+    mode: CPU
+  # Omitting maxContextTokens uses the model-advertised native context. Native
+  # context is intentionally limited to one slot.
+  runtime:
+    desiredConcurrency: 1
+  resources:
+    requests:
+      cpu: "2"
+      memory: 1Gi
+    limits:
+      memory: 2Gi

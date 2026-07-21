@@ -1,0 +1,533 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: modeldeployments.kama.tannerburns.github.io
+spec:
+  group: kama.tannerburns.github.io
+  names:
+    kind: ModelDeployment
+    listKind: ModelDeploymentList
+    plural: modeldeployments
+    shortNames:
+    - md
+    singular: modeldeployment
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.placement.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Serving')].status
+      name: Serving
+      type: string
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ModelDeployment is a fixed single-replica llama.cpp serving workload
+          for one ModelArtifact.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ModelDeploymentSpec declares one fixed single-replica model-serving
+              workload.
+            properties:
+              args:
+                description: Args is reserved so attempts to inject raw runtime arguments
+                  fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: args is controller-owned and forbidden
+                  rule: "false"
+              env:
+                description: Env is reserved so attempts to inject environment variables
+                  fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: env is controller-owned and forbidden
+                  rule: "false"
+              image:
+                description: Image is reserved so attempts to override runtime images
+                  fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: image is controller-owned and forbidden
+                  rule: "false"
+              modelRef:
+                description: ModelRef identifies a ModelArtifact in this namespace.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              paths:
+                description: Paths is reserved so attempts to override controller-owned
+                  paths fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: paths is controller-owned and forbidden
+                  rule: "false"
+              placement:
+                description: Placement explicitly selects CPU or a single accelerator.
+                properties:
+                  acceleratorResource:
+                    description: |-
+                      AcceleratorResource defaults to nvidia.com/gpu in Accelerator mode and is
+                      forbidden in CPU mode. M2 admits exactly one full NVIDIA GPU.
+                    type: string
+                  mode:
+                    description: Mode is required; M2 does not perform automatic placement.
+                    enum:
+                    - CPU
+                    - Accelerator
+                    type: string
+                required:
+                - mode
+                type: object
+              ports:
+                description: Ports is reserved so attempts to override network ports
+                  fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: ports is controller-owned and forbidden
+                  rule: "false"
+              probes:
+                description: Probes is reserved so attempts to override health probes
+                  fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: probes is controller-owned and forbidden
+                  rule: "false"
+              replicas:
+                description: Replicas is reserved so attempts to override the fixed
+                  replica count fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: replicas is controller-owned and forbidden
+                  rule: "false"
+              resources:
+                description: Resources declares CPU and memory needed by the serving
+                  container.
+                properties:
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Limits must include memory. CPU and ephemeral-storage
+                      limits are optional.
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: Requests must include positive CPU and memory values.
+                      Ephemeral storage is optional.
+                    type: object
+                required:
+                - limits
+                - requests
+                type: object
+              runtime:
+                default: {}
+                description: Runtime contains safe llama.cpp serving controls.
+                properties:
+                  args:
+                    description: Args is reserved so raw llama-server arguments cannot
+                      be supplied.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.args is controller-owned and forbidden
+                      rule: "false"
+                  desiredConcurrency:
+                    default: 1
+                    description: DesiredConcurrency is the fixed number of independent
+                      llama.cpp slots.
+                    format: int32
+                    maximum: 128
+                    minimum: 1
+                    type: integer
+                  drainTimeout:
+                    default: 10m
+                    description: DrainTimeout bounds how long active requests may
+                      finish during replacement or deletion.
+                    type: string
+                  env:
+                    description: Env is reserved so runtime environment variables
+                      cannot be supplied.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.env is controller-owned and forbidden
+                      rule: "false"
+                  expert:
+                    default: {}
+                    description: |-
+                      Expert contains typed low-level performance controls that cannot override
+                      Kama-owned model, network, topology, security, or lifecycle arguments.
+                    properties:
+                      batchSize:
+                        default: 2048
+                        description: BatchSize is the logical prompt-processing batch
+                          size.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      batchThreads:
+                        description: BatchThreads explicitly sets prompt-processing
+                          threads when present.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      flashAttention:
+                        default: Auto
+                        description: FlashAttention defaults to Auto.
+                        enum:
+                        - Auto
+                        - Enabled
+                        - Disabled
+                        type: string
+                      microBatchSize:
+                        default: 512
+                        description: MicroBatchSize is the physical prompt-processing
+                          batch size.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      threads:
+                        description: Threads explicitly sets generation threads when
+                          present.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
+                    x-kubernetes-validations:
+                    - message: microBatchSize must not exceed batchSize
+                      rule: '!has(self.microBatchSize) || !has(self.batchSize) ||
+                        self.microBatchSize <= self.batchSize'
+                  image:
+                    description: Image is reserved so the controller remains the only
+                      runtime image authority.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.image is controller-owned and forbidden
+                      rule: "false"
+                  kvCache:
+                    default: {}
+                    description: KVCache selects the key and value cache representations.
+                    properties:
+                      keyType:
+                        default: f16
+                        description: KeyType defaults to f16.
+                        enum:
+                        - f16
+                        - q8_0
+                        - q4_0
+                        type: string
+                      valueType:
+                        default: f16
+                        description: ValueType defaults to f16.
+                        enum:
+                        - f16
+                        - q8_0
+                        - q4_0
+                        type: string
+                    type: object
+                  maxContextTokens:
+                    description: |-
+                      MaxContextTokens is the exact per-request context. Omission selects the
+                      model-advertised native context and does not permit silent shrinking.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  paths:
+                    description: Paths is reserved so runtime filesystem paths cannot
+                      be supplied.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.paths is controller-owned and forbidden
+                      rule: "false"
+                  ports:
+                    description: Ports is reserved so runtime network ports cannot
+                      be supplied.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.ports is controller-owned and forbidden
+                      rule: "false"
+                  probes:
+                    description: Probes is reserved so runtime health probes cannot
+                      be supplied.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.probes is controller-owned and forbidden
+                      rule: "false"
+                  replicas:
+                    description: Replicas is reserved so the runtime cannot bypass
+                      fixed single-replica serving.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.replicas is controller-owned and forbidden
+                      rule: "false"
+                  topology:
+                    description: Topology is reserved so runtime topology cannot be
+                      supplied.
+                    type: object
+                    x-kubernetes-validations:
+                    - message: runtime.topology is controller-owned and forbidden
+                      rule: "false"
+                type: object
+                x-kubernetes-validations:
+                - message: model-native context requires desiredConcurrency to be
+                    1
+                  rule: has(self.maxContextTokens) || !has(self.desiredConcurrency)
+                    || self.desiredConcurrency == 1
+              topology:
+                description: Topology is reserved so attempts to override placement
+                  topology fail schema validation.
+                type: object
+                x-kubernetes-validations:
+                - message: topology is controller-owned and forbidden
+                  rule: "false"
+            required:
+            - modelRef
+            - placement
+            - resources
+            type: object
+          status:
+            description: ModelDeploymentStatus reports artifact, workload, runtime,
+              and serving state.
+            properties:
+              artifact:
+                description: Artifact identifies the exact verified artifact selected
+                  for this workload.
+                properties:
+                  digest:
+                    description: Digest is the verified artifact or canonical manifest
+                      SHA-256.
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  name:
+                    description: Name is the referenced ModelArtifact name.
+                    type: string
+                  uid:
+                    description: UID identifies the exact ModelArtifact object observed
+                      by the controller.
+                    type: string
+                type: object
+              conditions:
+                description: Conditions summarize dependency, scheduling, runtime,
+                  serving, and degradation state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              deploymentRef:
+                description: DeploymentRef identifies the generated singleton Deployment.
+                properties:
+                  name:
+                    description: Name is the generated object's name.
+                    type: string
+                  uid:
+                    description: UID identifies the exact object observed by the controller.
+                    type: string
+                required:
+                - name
+                type: object
+              desiredReplicas:
+                description: DesiredReplicas is one whenever an artifact-backed serving
+                  workload should exist.
+                format: int32
+                maximum: 1
+                minimum: 0
+                type: integer
+              observedGeneration:
+                description: ObservedGeneration is the most recent generation reconciled
+                  by the controller.
+                format: int64
+                type: integer
+              readyReplicas:
+                description: ReadyReplicas is the number of ready replicas for the
+                  desired runtime fingerprint.
+                format: int32
+                maximum: 1
+                minimum: 0
+                type: integer
+              runtime:
+                description: Runtime reports the current desired and observed runtime
+                  identity.
+                properties:
+                  acceleratorDetected:
+                    description: |-
+                      AcceleratorDetected reports whether the runtime observed its configured accelerator.
+                      It is nil until a supervisor observation is available.
+                    type: boolean
+                  desiredFingerprint:
+                    description: DesiredFingerprint identifies the current spec, artifact,
+                      image, and generated configuration.
+                    pattern: ^[a-f0-9]{20}$
+                    type: string
+                  desiredImage:
+                    description: DesiredImage is the image selected by controller
+                      configuration.
+                    type: string
+                  effectiveConcurrency:
+                    description: EffectiveConcurrency is the number of runtime slots
+                      observed by the supervisor.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  effectiveContextTokens:
+                    description: EffectiveContextTokens is the actual per-slot context
+                      loaded by the runtime.
+                    format: int64
+                    minimum: 1
+                    type: integer
+                  llamaCommit:
+                    description: LlamaCommit is the pinned llama.cpp source commit
+                      reported by the runtime.
+                    pattern: ^[a-f0-9]{40}$
+                    type: string
+                  loadedFingerprint:
+                    description: |-
+                      LoadedFingerprint is a durable checkpoint that this exact runtime
+                      fingerprint completed loading successfully. It does not by itself imply
+                      current readiness; Serving still requires a current supervisor response
+                      and ready endpoint.
+                    pattern: ^[a-f0-9]{20}$
+                    type: string
+                  observedFingerprint:
+                    description: ObservedFingerprint identifies the configuration
+                      reported by the observed serving Pod's supervisor.
+                    pattern: ^[a-f0-9]{20}$
+                    type: string
+                  observedImage:
+                    description: ObservedImage is the immutable image identity reported
+                      by the serving Pod.
+                    type: string
+                  offloadedLayers:
+                    description: OffloadedLayers is the bounded number of model layers
+                      reported as accelerator-offloaded.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  state:
+                    description: State is the latest bounded supervisor lifecycle
+                      state.
+                    enum:
+                    - Initializing
+                    - Loading
+                    - Ready
+                    - Draining
+                    - LoadFailed
+                    - Exited
+                    type: string
+                type: object
+              serviceRef:
+                description: ServiceRef identifies the stable internal ClusterIP Service.
+                properties:
+                  name:
+                    description: Name is the generated object's name.
+                    type: string
+                  uid:
+                    description: UID identifies the exact object observed by the controller.
+                    type: string
+                required:
+                - name
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

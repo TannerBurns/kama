@@ -4,6 +4,9 @@
   authorization, checksum and shard failures, cache exhaustion, interrupted staging,
   scoped cleanup, guarded claim deletion, retained claims, snapshots, and PVC
   `Direct` integrity.
+- [Model serving, load failure, and drain](model-serving-and-drain.md): artifact
+  dependency gating, long loads, terminal runtime failures, CPU degradation,
+  accelerator checks, and drain-first update/deletion.
 
-Runbooks for serving, placement, gateway, and autoscaling incidents are added with
+Runbooks for automatic placement, gateway, and autoscaling incidents are added with
 their owning milestones.

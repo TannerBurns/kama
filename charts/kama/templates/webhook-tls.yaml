@@ -70,6 +70,26 @@ webhooks:
         scope: Namespaced
     sideEffects: None
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  - name: mmodeldeployment.kama.tannerburns.github.io
+    admissionReviewVersions: [v1]
+    clientConfig:
+      caBundle: {{ $ca.Cert | b64enc | quote }}
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-kama-tannerburns-github-io-v1alpha1-modeldeployment
+        port: 443
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    reinvocationPolicy: Never
+    rules:
+      - apiGroups: [kama.tannerburns.github.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [modeldeployments]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
@@ -114,6 +134,25 @@ webhooks:
         apiVersions: [v1alpha1]
         operations: [CREATE, UPDATE]
         resources: [modelartifacts]
+        scope: Namespaced
+    sideEffects: None
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+  - name: vmodeldeployment.kama.tannerburns.github.io
+    admissionReviewVersions: [v1]
+    clientConfig:
+      caBundle: {{ $ca.Cert | b64enc | quote }}
+      service:
+        name: {{ $serviceName }}
+        namespace: {{ .Release.Namespace }}
+        path: /validate-kama-tannerburns-github-io-v1alpha1-modeldeployment
+        port: 443
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups: [kama.tannerburns.github.io]
+        apiVersions: [v1alpha1]
+        operations: [CREATE, UPDATE]
+        resources: [modeldeployments]
         scope: Namespaced
     sideEffects: None
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}

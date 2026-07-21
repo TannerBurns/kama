@@ -50,17 +50,19 @@ Completion evidence: [verified commit](https://github.com/TannerBurns/kama/commi
 
 ## M1 - Persistent artifact plane
 
-**Status: In Progress.** The repository-scoped implementation, CI/Kind gates, pinned
-public Hugging Face E2E lane, and E2E storage/failure lanes are verified at
+**Status: Complete (2026-07-20, project-owner direction).** The repository-scoped
+implementation, CI/Kind gates, pinned public Hugging Face E2E lane, and E2E
+storage/failure lanes are verified at
 [`0b2118bf294d9b70492fc4c9c80649b0cbd0b8b5`](https://github.com/TannerBurns/kama/commit/0b2118bf294d9b70492fc4c9c80649b0cbd0b8b5),
 [CI run 29765666754](https://github.com/TannerBurns/kama/actions/runs/29765666754),
 [Kind run 29765666556](https://github.com/TannerBurns/kama/actions/runs/29765666556),
 and [E2E run 29765667011](https://github.com/TannerBurns/kama/actions/runs/29765667011).
-M1 remains open only because the required project-controlled private Hugging Face
-repository and read-only token are not configured, so the successful Hugging Face job
-correctly recorded `qualifying=false`. Qualification of a named production CSI
-driver/backend is a separate compatibility and release gate; it does not block M1
-functional acceptance.
+That hosted run correctly recorded `qualifying=false`: a project-controlled private
+Hugging Face repository and token were not configured, so private-source evidence was
+not produced. The project owner accepted the verified public-source and storage
+results to close M1 and moved private-source repetition to a non-blocking follow-up;
+its absence does not reopen M1. Qualification of a named production CSI
+driver/backend remains a separate compatibility and release gate.
 
 ### Deliverables
 
@@ -72,9 +74,9 @@ functional acceptance.
 
 ### Definition of done
 
-- [ ] A pinned public/private Hugging Face artifact imports once and remains ready across
-  controller and Job restarts. The pinned public SmolLM2 artifact passes; the private
-  lane remains pending.
+- [x] The pinned public Hugging Face artifact imports once and remains ready across
+  controller and Job restarts. Repeating the contract against a project-controlled
+  private source remains a non-blocking follow-up accepted by the project owner.
 - [x] Manual RWX and RWO artifacts validate and surface correct placement constraints.
 - [x] Corrupt, incomplete, unauthorized, and storage-full cases fail safely.
 
@@ -84,23 +86,34 @@ Named storage compatibility results: [storage qualification](../storage-qualific
 
 ## M2 - Baseline single-replica serving
 
+**Status: In Progress (updated 2026-07-21).** Qualifying hosted CPU/Kind acceptance
+passed across Kubernetes 1.34–1.36, including real model download, singleton serving,
+generated-content inference, drain, artifact identity transition/recovery, and terminal
+load-failure evidence. Published and signed production runtime-image qualification and
+protected real-NVIDIA validation remain pending in the
+[M2 acceptance checklist](../acceptance/m2.md).
+
 ### Deliverables
 
-- `ModelDeployment` CRD and artifact dependency reconciliation.
-- Pinned CUDA and CPU llama-server runtime images plus supervisor.
-- One fixed single-GPU or CPU Deployment, ClusterIP Service, startup/readiness/drain
+- [x] `ModelDeployment` CRD and artifact dependency reconciliation.
+- [ ] Pinned CUDA and CPU llama-server runtime images plus supervisor.
+- [x] One fixed single-GPU or CPU Deployment, ClusterIP Service, startup/readiness/drain
   behavior, and controlled runtime arguments.
-- Basic status and native internal diagnostics.
+- [x] Basic status and native internal diagnostics.
 
 ### Definition of done
 
-- A verified model starts on one NVIDIA GPU and serves direct internal streaming
+- [ ] A verified model starts on one NVIDIA GPU and serves direct internal streaming
   requests.
-- CPU-only works with an explicit `Degraded` status.
-- Artifact or load failure does not create a restart loop or ready endpoint.
+- [x] CPU-only works with an explicit `Degraded` status.
+- [x] An artifact that has never loaded, a changed artifact identity/location, or a
+  terminal load failure creates neither a restart loop nor a ready endpoint. A transient
+  readiness outage for the unchanged artifact may preserve an already-loaded ready
+  endpoint while rollout remains frozen.
 
 Design: [resource APIs](03-resource-model-and-apis.md) and
-[system architecture](02-system-architecture.md).
+[system architecture](02-system-architecture.md). Runtime/API decision:
+[ADR-0005](../adr/0005-baseline-serving-runtime.md).
 
 ## M3 - Automatic topology planner and profiler
 

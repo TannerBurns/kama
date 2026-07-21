@@ -1,0 +1,25 @@
+apiVersion: kama.tannerburns.github.io/v1alpha1
+kind: ModelDeployment
+metadata:
+  name: smollm2-gpu
+spec:
+  modelRef:
+    name: smollm2-360m-instruct
+  placement:
+    mode: Accelerator
+    acceleratorResource: nvidia.com/gpu
+  runtime:
+    # This is an exact per-request context. Kama does not reduce it to make the
+    # model fit. The controller derives the total context from this value and
+    # desiredConcurrency.
+    maxContextTokens: 2048
+    desiredConcurrency: 1
+    kvCache:
+      keyType: f16
+      valueType: f16
+  resources:
+    requests:
+      cpu: "2"
+      memory: 1Gi
+    limits:
+      memory: 2Gi
