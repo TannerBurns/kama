@@ -51,6 +51,8 @@ const (
 	testRuntimeCUDAImage = "example.invalid/kama-runtime-cuda:test"
 	testLlamaCommit      = "af6528e6df5d798f7f1363ec1141699be0f638e2"
 	testServingModelName = "model"
+	testReplacementModel = "replacement-model"
+	testModelRefCase     = "model reference"
 	testPodIP            = "127.0.0.9"
 )
 
@@ -206,7 +208,7 @@ func TestRuntimeFingerprintChangesForEveryMutableInputDomain(t *testing.T) {
 		"artifact location": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact, _ *ModelDeploymentReconciler) {
 			artifact.Status.Location.SubPath = "artifacts/replaced"
 		},
-		"model reference": func(deployment *kamav1alpha1.ModelDeployment, _ *kamav1alpha1.ModelArtifact, _ *ModelDeploymentReconciler) {
+		testModelRefCase: func(deployment *kamav1alpha1.ModelDeployment, _ *kamav1alpha1.ModelArtifact, _ *ModelDeploymentReconciler) {
 			deployment.Spec.ModelRef.Name = "replacement"
 		},
 		"placement": func(deployment *kamav1alpha1.ModelDeployment, _ *kamav1alpha1.ModelArtifact, _ *ModelDeploymentReconciler) {
@@ -273,8 +275,8 @@ func TestLoadedWorkloadPreservationRequiresExactArtifactIdentityAndLocation(t *t
 	}
 
 	tests := map[string]func(*kamav1alpha1.ModelDeployment, *kamav1alpha1.ModelArtifact){
-		"model reference": func(deployment *kamav1alpha1.ModelDeployment, _ *kamav1alpha1.ModelArtifact) {
-			deployment.Spec.ModelRef.Name = "replacement-model"
+		testModelRefCase: func(deployment *kamav1alpha1.ModelDeployment, _ *kamav1alpha1.ModelArtifact) {
+			deployment.Spec.ModelRef.Name = testReplacementModel
 		},
 		"artifact UID": func(_ *kamav1alpha1.ModelDeployment, artifact *kamav1alpha1.ModelArtifact) {
 			artifact.UID = types.UID("replacement-artifact-uid")
@@ -308,6 +310,7 @@ func TestLoadedWorkloadPreservationRequiresExactArtifactIdentityAndLocation(t *t
 	}
 }
 
+//nolint:gocyclo // This table verifies the complete drain and status contract for every identity domain.
 func TestModelDeploymentReconcileDrainsLoadedWorkloadForChangedArtifactIdentity(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -374,13 +377,13 @@ func TestModelDeploymentReconcileDrainsLoadedWorkloadForChangedArtifactIdentity(
 			},
 		},
 		{
-			name: "model reference",
+			name: testModelRefCase,
 			mutate: func(t *testing.T, kubeClient client.Client, deployment *kamav1alpha1.ModelDeployment,
 				artifact *kamav1alpha1.ModelArtifact,
 			) *kamav1alpha1.ModelArtifact {
 				t.Helper()
 				replacement := artifact.DeepCopy()
-				replacement.Name = "replacement-model"
+				replacement.Name = testReplacementModel
 				replacement.ResourceVersion = ""
 				replacement.UID = types.UID("replacement-artifact-uid")
 				markTestArtifactUnavailable(replacement)
@@ -1385,7 +1388,7 @@ func TestArtifactDeletionWaitsForModelDeploymentReference(t *testing.T) {
 	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(modelDeployment), &current); err != nil {
 		t.Fatalf("get ModelDeployment: %v", err)
 	}
-	current.Spec.ModelRef.Name = "replacement-model"
+	current.Spec.ModelRef.Name = testReplacementModel
 	if err := kubeClient.Update(context.Background(), &current); err != nil {
 		t.Fatalf("update ModelDeployment reference: %v", err)
 	}
