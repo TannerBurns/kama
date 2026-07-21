@@ -200,15 +200,13 @@ jobs:
             bash hack/release-check.sh
 
           expected_llama_version="version: ${{ steps.metadata.outputs.llama_build_number }} (${{ steps.metadata.outputs.llama_commit }})"
-          for ref in "${runtime_cpu_ref}" "${runtime_cuda_ref}"; do
-            llama_version="$(docker run --rm --platform linux/amd64 \
-              --entrypoint /usr/local/bin/llama-server "${ref}" --version 2>&1)"
-            if ! grep -Fq "${expected_llama_version}" <<<"${llama_version}"; then
-              echo "published runtime ${ref} has unexpected llama-server identity" >&2
-              printf '%s\n' "${llama_version}" >&2
-              exit 1
-            fi
-          done
+          llama_version="$(docker run --rm --platform linux/amd64 \
+            --entrypoint /usr/local/bin/llama-server "${runtime_cpu_ref}" --version 2>&1)"
+          if ! grep -Fq "${expected_llama_version}" <<<"${llama_version}"; then
+            echo "published CPU runtime ${runtime_cpu_ref} has unexpected llama-server identity" >&2
+            printf '%s\n' "${llama_version}" >&2
+            exit 1
+          fi
 
           docker pull --platform linux/arm64 "${runtime_cpu_ref}"
           arm64_supervisor_version="$(docker run --rm --platform linux/arm64 "${runtime_cpu_ref}" --version)"

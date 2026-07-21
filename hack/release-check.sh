@@ -430,19 +430,49 @@ if [[ "${CHECK_IMAGES:-0}" == "1" ]]; then
       echo "runtime image ${image} llama.cpp source hash ${image_llama_source_sha256} does not match ${llama_cpp_source_sha256}" >&2
       exit 1
     fi
-    runtime_version="$(docker run --rm "${image}" --version)"
+    runtime_version=""
+    if ! runtime_version="$(docker run --rm "${image}" --version 2>&1)"; then
+      echo "runtime image ${image} supervisor version command failed" >&2
+      printf '%s\n' "${runtime_version}" >&2
+      exit 1
+    fi
     if [[ "${runtime_version}" != "${version}" ]]; then
       echo "runtime image ${image} supervisor version ${runtime_version} does not match VERSION ${version}" >&2
       exit 1
     fi
-    llama_version="$(docker run --rm --entrypoint /usr/local/bin/llama-server "${image}" --version 2>&1)"
-    expected_llama_version="version: ${llama_cpp_build_number} (${llama_cpp_commit})"
-    if ! grep -Fq "${expected_llama_version}" <<<"${llama_version}"; then
-      echo "runtime image ${image} does not execute the pinned llama-server build" >&2
-      printf '%s\n' "${llama_version}" >&2
-      exit 1
-    fi
   done
+  expected_llama_version="version: ${llama_cpp_build_number} (${llama_cpp_commit})"
+  llama_version=""
+  if ! llama_version="$(docker run --rm --entrypoint /usr/local/bin/llama-server \
+    "${runtime_cpu_image}" --version 2>&1)"; then
+    echo "CPU runtime image ${runtime_cpu_image} llama-server version command failed" >&2
+    printf '%s\n' "${llama_version}" >&2
+    exit 1
+  fi
+  if ! grep -Fq "${expected_llama_version}" <<<"${llama_version}"; then
+    echo "CPU runtime image ${runtime_cpu_image} does not execute the pinned llama-server build" >&2
+    printf '%s\n' "${llama_version}" >&2
+    exit 1
+  fi
+  # libcuda is injected by the NVIDIA container runtime and is intentionally
+  # absent on ordinary hosted runners. Validate the CUDA binary and its embedded
+  # source identity without executing it here; the protected NVIDIA lane executes
+  # the same binary and verifies driver/CUDA linkage, offload, and inference.
+  if ! docker run --rm --entrypoint /bin/sh "${runtime_cuda_image}" -c \
+    'test -x /usr/local/bin/llama-server && grep -aF "$1" /usr/local/bin/llama-server >/dev/null' \
+    _ "${llama_cpp_commit}"; then
+    echo "CUDA runtime image ${runtime_cuda_image} does not contain the pinned llama-server binary" >&2
+    exit 1
+  fi
+  cuda_linkage="$(docker run --rm --entrypoint /bin/sh "${runtime_cuda_image}" -c \
+    'ldd /usr/local/bin/llama-server' 2>&1 || true)"
+  if ! grep -Eq 'libcudart\.so\.12 => /' <<<"${cuda_linkage}" ||
+    ! grep -Eq 'libcublas\.so\.12 => /' <<<"${cuda_linkage}" ||
+    ! grep -Eq 'libcuda\.so\.1 => not found' <<<"${cuda_linkage}"; then
+    echo "CUDA runtime image ${runtime_cuda_image} has unexpected GPU-independent linkage" >&2
+    printf '%s\n' "${cuda_linkage}" >&2
+    exit 1
+  fi
   image_cuda_version="$(docker image inspect --format '{{ index .Config.Labels "io.kama.cuda.version" }}' "${runtime_cuda_image}")"
   if [[ "${image_cuda_version}" != "${cuda_version}" ]]; then
     echo "CUDA runtime image version ${image_cuda_version} does not match ${cuda_version}" >&2
