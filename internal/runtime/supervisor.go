@@ -195,6 +195,11 @@ type Supervisor struct {
 	child       *exec.Cmd
 	becameReady bool
 
+	// observedCUDADevices is guarded by mu and keyed by llama.cpp's normalized
+	// CUDA device index. Repeated inventory output must not inflate the visible
+	// device count or let a later, smaller summary weaken the readiness gate.
+	observedCUDADevices map[string]string
+
 	childDone     chan struct{}
 	childDoneOnce sync.Once
 	drainDone     chan struct{}
@@ -238,8 +243,9 @@ func newSupervisor(config Config, options Options, initialError error) *Supervis
 			},
 			ObservedAt: now,
 		},
-		childDone: make(chan struct{}),
-		drainDone: make(chan struct{}),
+		observedCUDADevices: make(map[string]string),
+		childDone:           make(chan struct{}),
+		drainDone:           make(chan struct{}),
 	}
 }
 
@@ -876,9 +882,10 @@ func RequestDrain(ctx context.Context, address string) error {
 }
 
 var (
-	cudaCountPattern = regexp.MustCompile(`(?i)^ggml_cuda_init: found ([0-9]+) CUDA devices`)
-	offloadPattern   = regexp.MustCompile(`(?i)^(?:llm_)?load_tensors: offloaded ([0-9]+)/([1-9][0-9]*) layers to GPU`)
-	devicePattern    = regexp.MustCompile(`(?i)^[[:space:]]*Device [0-9]+:[[:space:]]*([^,;]{1,96}),[[:space:]]*compute capability`)
+	cudaCountPattern       = regexp.MustCompile(`(?i)^ggml_cuda_init: found ([0-9]+) CUDA devices`)
+	offloadPattern         = regexp.MustCompile(`(?i)^(?:llm_)?load_tensors: offloaded ([0-9]+)/([1-9][0-9]*) layers to GPU`)
+	legacyDevicePattern    = regexp.MustCompile(`(?i)^[[:space:]]*Device ([0-9]{1,3}):[[:space:]]*([^,;]{1,96}),[[:space:]]*compute capability`)
+	deviceInventoryPattern = regexp.MustCompile(`(?i)^[[:space:]]*(?:cmn[[:space:]]+common_param:[[:space:]]+)?-[[:space:]]+CUDA([0-9]{1,3})[[:space:]]*:[[:space:]]*([[:alnum:]][[:alnum:] ._+/-]{0,95})[[:space:]]+\([0-9]+ MiB,[[:space:]]*[0-9]+ MiB free\)[[:space:]]*$`)
 )
 
 func (supervisor *Supervisor) consumeChildLog(stream string, reader io.Reader) {
@@ -912,9 +919,7 @@ func (supervisor *Supervisor) observeStartupLog(line string) {
 	defer supervisor.mu.Unlock()
 	if match := cudaCountPattern.FindStringSubmatch(line); len(match) == 2 {
 		if value, err := strconv.ParseInt(match[1], 10, 32); err == nil {
-			count := int32(value)
-			supervisor.state.Runtime.VisibleAccelerators = &count
-			supervisor.state.Runtime.AcceleratorDetected = count > 0
+			supervisor.updateVisibleAcceleratorsLocked(int32(value))
 		}
 	}
 	if match := offloadPattern.FindStringSubmatch(line); len(match) == 3 {
@@ -930,13 +935,47 @@ func (supervisor *Supervisor) observeStartupLog(line string) {
 			}
 		}
 	}
-	if match := devicePattern.FindStringSubmatch(line); len(match) == 2 {
-		supervisor.state.Runtime.AcceleratorDevice = sanitizeDevice(match[1])
-		if supervisor.state.Runtime.AcceleratorDevice != "" {
-			supervisor.state.Runtime.AcceleratorDetected = true
-		}
+	if match := legacyDevicePattern.FindStringSubmatch(line); len(match) == 3 {
+		supervisor.observeCUDADeviceLocked(match[1], match[2])
+	}
+	if match := deviceInventoryPattern.FindStringSubmatch(line); len(match) == 3 {
+		supervisor.observeCUDADeviceLocked(match[1], match[2])
 	}
 	supervisor.touchLocked()
+}
+
+func (supervisor *Supervisor) observeCUDADeviceLocked(rawIndex, rawDevice string) {
+	index, err := strconv.ParseUint(rawIndex, 10, 16)
+	device := sanitizeDevice(rawDevice)
+	if err != nil || device == "" {
+		return
+	}
+	key := strconv.FormatUint(index, 10)
+	if _, exists := supervisor.observedCUDADevices[key]; !exists {
+		supervisor.observedCUDADevices[key] = device
+	}
+	supervisor.updateVisibleAcceleratorsLocked(int32(len(supervisor.observedCUDADevices)))
+}
+
+func (supervisor *Supervisor) updateVisibleAcceleratorsLocked(observed int32) {
+	count := observed
+	if current := supervisor.state.Runtime.VisibleAccelerators; current != nil && *current > count {
+		count = *current
+	}
+	if devices := int32(len(supervisor.observedCUDADevices)); devices > count {
+		count = devices
+	}
+	supervisor.state.Runtime.VisibleAccelerators = &count
+	if count > 0 {
+		supervisor.state.Runtime.AcceleratorDetected = true
+	}
+	if count != 1 || len(supervisor.observedCUDADevices) != 1 {
+		supervisor.state.Runtime.AcceleratorDevice = ""
+		return
+	}
+	for _, device := range supervisor.observedCUDADevices {
+		supervisor.state.Runtime.AcceleratorDevice = device
+	}
 }
 
 func sanitizeDevice(value string) string {
@@ -954,7 +993,7 @@ func sanitizeLogLine(value string) string {
 			return "sensitive-output-redacted"
 		}
 	}
-	if cudaCountPattern.MatchString(value) || devicePattern.MatchString(value) {
+	if cudaCountPattern.MatchString(value) || legacyDevicePattern.MatchString(value) || deviceInventoryPattern.MatchString(value) {
 		return "accelerator-inventory-observed"
 	}
 	if offloadPattern.MatchString(value) {

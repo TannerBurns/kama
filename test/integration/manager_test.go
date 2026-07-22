@@ -296,7 +296,7 @@ func (s *integrationSuite) startManager(t *testing.T) {
 			CPUImage:    "registry.invalid/kama-runtime-cpu:test",
 			CUDAImage:   "registry.invalid/kama-runtime-cuda:test",
 			PullPolicy:  corev1.PullNever,
-			LlamaCommit: "af6528e6df5d798f7f1363ec1141699be0f638e2",
+			LlamaCommit: "b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45",
 		},
 	).SetupWithManager(manager); err != nil {
 		t.Fatalf("register ModelDeployment controller: %v", err)
@@ -1058,7 +1058,7 @@ func (s *integrationSuite) exerciseModelDeploymentLifecycle(
 				},
 				"runtime": map[string]any{
 					"mode": "CPU", "effectiveContextTokens": 4096, "desiredConcurrency": 1,
-					"llamaCPPCommit": "af6528e6df5d798f7f1363ec1141699be0f638e2",
+					"llamaCPPCommit": "b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45",
 				},
 			})
 		}),

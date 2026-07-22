@@ -1518,7 +1518,9 @@ signed_linux_manifest_digests() {
     "https://${registry}/v2/${repository}/manifests/${image_digest}" 2>/dev/null)" || return 1
   jq -ce --arg requested "${image_digest}" '
     (if (.manifests | type) == "array"
-      then [.manifests[] | select(.platform.os == "linux") | .digest]
+      then ([.manifests[] | select(.platform.os == "linux") | .digest]) as $linux |
+        select(($linux | length) > 0) |
+        [$requested] + $linux
       else [$requested]
     end) as $digests |
     select(($digests | length) > 0) |

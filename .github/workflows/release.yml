@@ -11,27 +11,497 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  MANAGER_IMAGE: ghcr.io/tannerburns/kama-manager
+  IMPORTER_IMAGE: ghcr.io/tannerburns/kama-importer
+  FIXTURES_IMAGE: ghcr.io/tannerburns/kama-test-fixtures
+  RUNTIME_CPU_IMAGE: ghcr.io/tannerburns/kama-runtime-cpu
+  RUNTIME_CUDA_IMAGE: ghcr.io/tannerburns/kama-runtime-cuda
+  CHART_REPOSITORY: ghcr.io/tannerburns/charts
+
 jobs:
-  publish:
-    name: Publish signed OCI artifacts
+  metadata:
+    name: Validate release source
     runs-on: ubuntu-24.04
-    timeout-minutes: 360
+    timeout-minutes: 20
     permissions:
       contents: read
-      id-token: write
-      packages: write
-    env:
-      MANAGER_IMAGE: ghcr.io/tannerburns/kama-manager
-      IMPORTER_IMAGE: ghcr.io/tannerburns/kama-importer
-      FIXTURES_IMAGE: ghcr.io/tannerburns/kama-test-fixtures
-      RUNTIME_CPU_IMAGE: ghcr.io/tannerburns/kama-runtime-cpu
-      RUNTIME_CUDA_IMAGE: ghcr.io/tannerburns/kama-runtime-cuda
-      CHART_REPOSITORY: ghcr.io/tannerburns/charts
+      packages: read
+    outputs:
+      version: ${{ steps.metadata.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      created: ${{ steps.metadata.outputs.created }}
+      epoch: ${{ steps.metadata.outputs.epoch }}
+      llama_commit: ${{ steps.metadata.outputs.llama_commit }}
+      llama_build_number: ${{ steps.metadata.outputs.llama_build_number }}
+      llama_source_sha256: ${{ steps.metadata.outputs.llama_source_sha256 }}
     steps:
       - name: Check out source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: .go-version
+          cache: true
+
+      - name: Install pinned release validation tools
+        run: make helm
+
+      - name: Validate release tag, source, and target availability
+        id: metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_EVENT_NAME}" != "push" || "${GITHUB_REF_TYPE}" != "tag" ]]; then
+            echo "release publication requires a tag push" >&2
+            exit 1
+          fi
+          version="$(tr -d '\r\n' < VERSION)"
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+          commit="$(git rev-parse HEAD)"
+          if [[ ! "${commit}" =~ ^[a-f0-9]{40}$ || "${commit}" != "${GITHUB_SHA}" ]]; then
+            echo "checked-out commit ${commit} does not match event commit ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          if [[ "$(git rev-parse "${GITHUB_REF_NAME}^{commit}")" != "${commit}" ]]; then
+            echo "tag ${GITHUB_REF_NAME} does not resolve to checked-out commit ${commit}" >&2
+            exit 1
+          fi
+          if ! git show-ref --verify --quiet refs/remotes/origin/main ||
+            ! git merge-base --is-ancestor "${commit}" refs/remotes/origin/main; then
+            echo "release commit ${commit} is not reachable from origin/main" >&2
+            exit 1
+          fi
+          created="$(git show -s --format=%cI HEAD)"
+          epoch="$(git show -s --format=%ct HEAD)"
+          llama_commit="$(awk '$1 == "LLAMA_CPP_COMMIT" {print $3}' hack/versions.mk)"
+          llama_build_number="$(awk '$1 == "LLAMA_CPP_BUILD_NUMBER" {print $3}' hack/versions.mk)"
+          llama_source_sha256="$(awk '$1 == "LLAMA_CPP_SOURCE_SHA256" {print $3}' hack/versions.mk)"
+          RELEASE_TAG="${GITHUB_REF_NAME}" make release-check
+
+          assert_tag_absent() {
+            local repository=$1
+            local reference=$2
+            local registry_token status
+            local response_file="${RUNNER_TEMP}/ghcr-manifest-response.json"
+
+            if ! registry_token="$(
+              curl --fail --silent --show-error \
+                --user "${GITHUB_ACTOR}:${GH_TOKEN}" \
+                --get \
+                --data-urlencode 'service=ghcr.io' \
+                --data-urlencode "scope=repository:${repository}:pull" \
+                https://ghcr.io/token |
+                jq -er '.token | strings | select(length > 0)'
+            )"; then
+              echo "could not obtain read access for ghcr.io/${repository}" >&2
+              return 1
+            fi
+            if ! status="$(
+              curl --silent --show-error \
+                --output "${response_file}" \
+                --write-out '%{http_code}' \
+                --header "Authorization: Bearer ${registry_token}" \
+                --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json' \
+                "https://ghcr.io/v2/${repository}/manifests/${reference}"
+            )"; then
+              echo "could not query ghcr.io/${repository}:${reference}" >&2
+              return 1
+            fi
+            case "${status}" in
+              404)
+                ;;
+              200)
+                echo "refusing to overwrite existing ghcr.io/${repository}:${reference}" >&2
+                return 1
+                ;;
+              *)
+                echo "ghcr.io/${repository}:${reference} returned HTTP ${status}; failing closed" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          for repository in \
+            tannerburns/kama-manager \
+            tannerburns/kama-importer \
+            tannerburns/kama-test-fixtures \
+            tannerburns/kama-runtime-cpu \
+            tannerburns/kama-runtime-cuda \
+            tannerburns/charts/kama; do
+            assert_tag_absent "${repository}" "${version}"
+          done
+
+          {
+            echo "version=${version}"
+            echo "commit=${commit}"
+            echo "created=${created}"
+            echo "epoch=${epoch}"
+            echo "llama_commit=${llama_commit}"
+            echo "llama_build_number=${llama_build_number}"
+            echo "llama_source_sha256=${llama_source_sha256}"
+          } >> "${GITHUB_OUTPUT}"
+
+  manager:
+    name: Build manager image
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - name: Reject release workflow reruns
+        if: github.run_attempt != 1
+        run: |
+          echo "release tags are single-use; create a new version instead of rerunning this workflow" >&2
+          exit 1
+
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish manager image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.MANAGER_IMAGE }}:${{ needs.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.metadata.outputs.version }}
+            VCS_REF=${{ needs.metadata.outputs.commit }}
+            CREATED=${{ needs.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.metadata.outputs.epoch }}
+          provenance: mode=max
+
+      - name: Verify published manager image
+        id: verify
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.MANAGER_IMAGE }}:${{ needs.metadata.outputs.version }}
+          EXPECTED_PLATFORMS: '["linux/amd64","linux/arm64"]'
+        run: |
+          bash hack/verify-published-release-image.sh \
+            "${IMAGE_REF}" "${BUILD_DIGEST}" "${EXPECTED_PLATFORMS}"
+          echo "digest=${BUILD_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  importer:
+    name: Build importer image
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - name: Reject release workflow reruns
+        if: github.run_attempt != 1
+        run: |
+          echo "release tags are single-use; create a new version instead of rerunning this workflow" >&2
+          exit 1
+
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish importer image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.importer
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMPORTER_IMAGE }}:${{ needs.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.metadata.outputs.version }}
+            VCS_REF=${{ needs.metadata.outputs.commit }}
+            CREATED=${{ needs.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.metadata.outputs.epoch }}
+          provenance: mode=max
+
+      - name: Verify published importer image
+        id: verify
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.IMPORTER_IMAGE }}:${{ needs.metadata.outputs.version }}
+          EXPECTED_PLATFORMS: '["linux/amd64","linux/arm64"]'
+        run: |
+          bash hack/verify-published-release-image.sh \
+            "${IMAGE_REF}" "${BUILD_DIGEST}" "${EXPECTED_PLATFORMS}"
+          echo "digest=${BUILD_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  fixtures:
+    name: Build fixture image
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - name: Reject release workflow reruns
+        if: github.run_attempt != 1
+        run: |
+          echo "release tags are single-use; create a new version instead of rerunning this workflow" >&2
+          exit 1
+
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish fixture image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.test-fixtures
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.FIXTURES_IMAGE }}:${{ needs.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.metadata.outputs.version }}
+            VCS_REF=${{ needs.metadata.outputs.commit }}
+            CREATED=${{ needs.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.metadata.outputs.epoch }}
+          provenance: mode=max
+
+      - name: Verify published fixture image
+        id: verify
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.FIXTURES_IMAGE }}:${{ needs.metadata.outputs.version }}
+          EXPECTED_PLATFORMS: '["linux/amd64","linux/arm64"]'
+        run: |
+          bash hack/verify-published-release-image.sh \
+            "${IMAGE_REF}" "${BUILD_DIGEST}" "${EXPECTED_PLATFORMS}"
+          echo "digest=${BUILD_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  runtime_cpu:
+    name: Build CPU runtime image
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - name: Reject release workflow reruns
+        if: github.run_attempt != 1
+        run: |
+          echo "release tags are single-use; create a new version instead of rerunning this workflow" >&2
+          exit 1
+
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish CPU runtime image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.runtime-cpu
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.RUNTIME_CPU_IMAGE }}:${{ needs.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.metadata.outputs.version }}
+            VCS_REF=${{ needs.metadata.outputs.commit }}
+            CREATED=${{ needs.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.metadata.outputs.epoch }}
+            LLAMA_CPP_COMMIT=${{ needs.metadata.outputs.llama_commit }}
+            LLAMA_CPP_BUILD_NUMBER=${{ needs.metadata.outputs.llama_build_number }}
+            LLAMA_CPP_SOURCE_SHA256=${{ needs.metadata.outputs.llama_source_sha256 }}
+          provenance: mode=max
+
+      - name: Verify published CPU runtime image
+        id: verify
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.RUNTIME_CPU_IMAGE }}:${{ needs.metadata.outputs.version }}
+          EXPECTED_PLATFORMS: '["linux/amd64","linux/arm64"]'
+        run: |
+          bash hack/verify-published-release-image.sh \
+            "${IMAGE_REF}" "${BUILD_DIGEST}" "${EXPECTED_PLATFORMS}"
+          echo "digest=${BUILD_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  runtime_cuda:
+    name: Build CUDA runtime image
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.verify.outputs.digest }}
+    steps:
+      - name: Reject release workflow reruns
+        if: github.run_attempt != 1
+        run: |
+          echo "release tags are single-use; create a new version instead of rerunning this workflow" >&2
+          exit 1
+
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish CUDA runtime image
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile.runtime-cuda
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.RUNTIME_CUDA_IMAGE }}:${{ needs.metadata.outputs.version }}
+          build-args: |
+            VERSION=${{ needs.metadata.outputs.version }}
+            VCS_REF=${{ needs.metadata.outputs.commit }}
+            CREATED=${{ needs.metadata.outputs.created }}
+            SOURCE_DATE_EPOCH=${{ needs.metadata.outputs.epoch }}
+            LLAMA_CPP_COMMIT=${{ needs.metadata.outputs.llama_commit }}
+            LLAMA_CPP_BUILD_NUMBER=${{ needs.metadata.outputs.llama_build_number }}
+            LLAMA_CPP_SOURCE_SHA256=${{ needs.metadata.outputs.llama_source_sha256 }}
+          provenance: mode=max
+
+      - name: Verify published CUDA runtime image
+        id: verify
+        shell: bash
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REF: ${{ env.RUNTIME_CUDA_IMAGE }}:${{ needs.metadata.outputs.version }}
+          EXPECTED_PLATFORMS: '["linux/amd64"]'
+        run: |
+          bash hack/verify-published-release-image.sh \
+            "${IMAGE_REF}" "${BUILD_DIGEST}" "${EXPECTED_PLATFORMS}"
+          echo "digest=${BUILD_DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  finalize:
+    name: Validate, sign, and attest release
+    needs:
+      - metadata
+      - manager
+      - importer
+      - fixtures
+      - runtime_cpu
+      - runtime_cuda
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    env:
+      RELEASE_VERSION: ${{ needs.metadata.outputs.version }}
+      LLAMA_CPP_COMMIT: ${{ needs.metadata.outputs.llama_commit }}
+      LLAMA_CPP_BUILD_NUMBER: ${{ needs.metadata.outputs.llama_build_number }}
+      MANAGER_DIGEST: ${{ needs.manager.outputs.digest }}
+      IMPORTER_DIGEST: ${{ needs.importer.outputs.digest }}
+      FIXTURES_DIGEST: ${{ needs.fixtures.outputs.digest }}
+      RUNTIME_CPU_DIGEST: ${{ needs.runtime_cpu.outputs.digest }}
+      RUNTIME_CUDA_DIGEST: ${{ needs.runtime_cuda.outputs.digest }}
+    steps:
+      - name: Reject release workflow reruns
+        if: github.run_attempt != 1
+        run: |
+          echo "release tags are single-use; create a new version instead of rerunning this workflow" >&2
+          exit 1
+
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          ref: ${{ needs.metadata.outputs.commit }}
 
       - name: Set up Go
         uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
@@ -48,30 +518,6 @@ jobs:
       - name: Install pinned release tools
         run: make helm supply-chain-tools
 
-      - name: Validate release tag and source
-        id: metadata
-        shell: bash
-        run: |
-          version="$(tr -d '\r\n' < VERSION)"
-          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
-            echo "tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
-            exit 1
-          fi
-          created="$(git show -s --format=%cI HEAD)"
-          epoch="$(git show -s --format=%ct HEAD)"
-          llama_commit="$(awk '$1 == "LLAMA_CPP_COMMIT" {print $3}' hack/versions.mk)"
-          llama_build_number="$(awk '$1 == "LLAMA_CPP_BUILD_NUMBER" {print $3}' hack/versions.mk)"
-          llama_source_sha256="$(awk '$1 == "LLAMA_CPP_SOURCE_SHA256" {print $3}' hack/versions.mk)"
-          {
-            echo "version=${version}"
-            echo "created=${created}"
-            echo "epoch=${epoch}"
-            echo "llama_commit=${llama_commit}"
-            echo "llama_build_number=${llama_build_number}"
-            echo "llama_source_sha256=${llama_source_sha256}"
-          } >> "${GITHUB_OUTPUT}"
-          RELEASE_TAG="${GITHUB_REF_NAME}" make release-check
-
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
@@ -79,103 +525,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and publish manager image
-        id: manager
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.MANAGER_IMAGE }}:${{ steps.metadata.outputs.version }}
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            CREATED=${{ steps.metadata.outputs.created }}
-            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
-          provenance: mode=max
-
-      - name: Build and publish importer image
-        id: importer
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.importer
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.IMPORTER_IMAGE }}:${{ steps.metadata.outputs.version }}
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            CREATED=${{ steps.metadata.outputs.created }}
-            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
-          provenance: mode=max
-
-      - name: Build and publish fixture image
-        id: fixtures
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.test-fixtures
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.FIXTURES_IMAGE }}:${{ steps.metadata.outputs.version }}
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            CREATED=${{ steps.metadata.outputs.created }}
-            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
-          provenance: mode=max
-
-      - name: Build and publish CPU runtime image
-        id: runtime-cpu
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.runtime-cpu
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.RUNTIME_CPU_IMAGE }}:${{ steps.metadata.outputs.version }}
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            CREATED=${{ steps.metadata.outputs.created }}
-            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
-            LLAMA_CPP_COMMIT=${{ steps.metadata.outputs.llama_commit }}
-            LLAMA_CPP_BUILD_NUMBER=${{ steps.metadata.outputs.llama_build_number }}
-            LLAMA_CPP_SOURCE_SHA256=${{ steps.metadata.outputs.llama_source_sha256 }}
-          provenance: mode=max
-
-      - name: Build and publish CUDA runtime image
-        id: runtime-cuda
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
-        with:
-          context: .
-          file: Dockerfile.runtime-cuda
-          platforms: linux/amd64
-          push: true
-          tags: ${{ env.RUNTIME_CUDA_IMAGE }}:${{ steps.metadata.outputs.version }}
-          build-args: |
-            VERSION=${{ steps.metadata.outputs.version }}
-            VCS_REF=${{ github.sha }}
-            CREATED=${{ steps.metadata.outputs.created }}
-            SOURCE_DATE_EPOCH=${{ steps.metadata.outputs.epoch }}
-            LLAMA_CPP_COMMIT=${{ steps.metadata.outputs.llama_commit }}
-            LLAMA_CPP_BUILD_NUMBER=${{ steps.metadata.outputs.llama_build_number }}
-            LLAMA_CPP_SOURCE_SHA256=${{ steps.metadata.outputs.llama_source_sha256 }}
-          provenance: mode=max
-
       - name: Validate published runtime manifests and binaries
         shell: bash
         run: |
-          manager_ref="${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}"
-          importer_ref="${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}"
-          fixtures_ref="${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}"
-          runtime_cpu_ref="${RUNTIME_CPU_IMAGE}@${{ steps.runtime-cpu.outputs.digest }}"
-          runtime_cuda_ref="${RUNTIME_CUDA_IMAGE}@${{ steps.runtime-cuda.outputs.digest }}"
+          for digest_name in MANAGER_DIGEST IMPORTER_DIGEST FIXTURES_DIGEST \
+            RUNTIME_CPU_DIGEST RUNTIME_CUDA_DIGEST; do
+            digest="${!digest_name}"
+            if [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "${digest_name} is not an immutable SHA-256 digest" >&2
+              exit 1
+            fi
+          done
 
-          cpu_platforms="$(docker buildx imagetools inspect --raw "${runtime_cpu_ref}" | jq -c \
-            '[.manifests[].platform | select(.os == "linux") | (.os + "/" + .architecture)] | unique | sort')"
+          manager_ref="${MANAGER_IMAGE}@${MANAGER_DIGEST}"
+          importer_ref="${IMPORTER_IMAGE}@${IMPORTER_DIGEST}"
+          fixtures_ref="${FIXTURES_IMAGE}@${FIXTURES_DIGEST}"
+          runtime_cpu_ref="${RUNTIME_CPU_IMAGE}@${RUNTIME_CPU_DIGEST}"
+          runtime_cuda_ref="${RUNTIME_CUDA_IMAGE}@${RUNTIME_CUDA_DIGEST}"
+
+          runtime_cpu_manifest="$(docker buildx imagetools inspect --raw "${runtime_cpu_ref}")"
+          cpu_platforms="$(jq -c \
+            '[.manifests[].platform | select(.os == "linux") | (.os + "/" + .architecture)] | unique | sort' \
+            <<<"${runtime_cpu_manifest}")"
           cuda_platforms="$(docker buildx imagetools inspect --raw "${runtime_cuda_ref}" | jq -c \
             '[.manifests[].platform | select(.os == "linux") | (.os + "/" + .architecture)] | unique | sort')"
           if [[ "${cpu_platforms}" != '["linux/amd64","linux/arm64"]' ]]; then
@@ -199,7 +570,7 @@ jobs:
             RUNTIME_CUDA_IMG="${runtime_cuda_ref}" \
             bash hack/release-check.sh
 
-          expected_llama_version="version: ${{ steps.metadata.outputs.llama_build_number }} (${{ steps.metadata.outputs.llama_commit }})"
+          expected_llama_version="version: ${LLAMA_CPP_BUILD_NUMBER} (${LLAMA_CPP_COMMIT})"
           if ! llama_version="$(docker run --rm --platform linux/amd64 \
             --entrypoint /usr/local/bin/llama-server "${runtime_cpu_ref}" --version 2>&1)"; then
             echo "published CPU runtime ${runtime_cpu_ref} could not execute llama-server --version" >&2
@@ -212,20 +583,32 @@ jobs:
             exit 1
           fi
 
-          docker pull --platform linux/arm64 "${runtime_cpu_ref}"
-          arm64_supervisor_version="$(docker run --rm --platform linux/arm64 "${runtime_cpu_ref}" --version)"
-          if [[ "${arm64_supervisor_version}" != "${{ steps.metadata.outputs.version }}" ]]; then
+          runtime_cpu_arm64_digest="$(jq -r '
+            [.manifests[] |
+              select(.platform.os == "linux" and .platform.architecture == "arm64") |
+              .digest] |
+            if length == 1 then .[0] else "" end
+          ' <<<"${runtime_cpu_manifest}")"
+          if [[ ! "${runtime_cpu_arm64_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "could not resolve exactly one linux/arm64 CPU runtime manifest digest" >&2
+            exit 1
+          fi
+          runtime_cpu_arm64_ref="${RUNTIME_CPU_IMAGE}@${runtime_cpu_arm64_digest}"
+          docker pull --platform linux/arm64 "${runtime_cpu_arm64_ref}"
+          arm64_supervisor_version="$(docker run --rm --platform linux/arm64 \
+            "${runtime_cpu_arm64_ref}" --version)"
+          if [[ "${arm64_supervisor_version}" != "${RELEASE_VERSION}" ]]; then
             echo "published arm64 CPU supervisor version is ${arm64_supervisor_version}" >&2
             exit 1
           fi
           if ! arm64_llama_version="$(docker run --rm --platform linux/arm64 \
-            --entrypoint /usr/local/bin/llama-server "${runtime_cpu_ref}" --version 2>&1)"; then
-            echo "published arm64 CPU runtime could not execute llama-server --version" >&2
+            --entrypoint /usr/local/bin/llama-server "${runtime_cpu_arm64_ref}" --version 2>&1)"; then
+            echo "published arm64 CPU runtime ${runtime_cpu_arm64_ref} could not execute llama-server --version" >&2
             printf '%s\n' "${arm64_llama_version}" >&2
             exit 1
           fi
           if ! grep -Fq "${expected_llama_version}" <<<"${arm64_llama_version}"; then
-            echo "published arm64 CPU runtime has unexpected llama-server identity" >&2
+            echo "published arm64 CPU runtime ${runtime_cpu_arm64_ref} has unexpected llama-server identity" >&2
             printf '%s\n' "${arm64_llama_version}" >&2
             exit 1
           fi
@@ -238,7 +621,7 @@ jobs:
         run: |
           make helm-package
           printf '%s' "${GH_TOKEN}" | ./bin/helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password-stdin
-          output="$(./bin/helm push "dist/kama-${{ steps.metadata.outputs.version }}.tgz" "oci://${CHART_REPOSITORY}" 2>&1)"
+          output="$(./bin/helm push "dist/kama-${RELEASE_VERSION}.tgz" "oci://${CHART_REPOSITORY}" 2>&1)"
           printf '%s\n' "${output}"
           digest="$(printf '%s\n' "${output}" | awk '$1 == "Digest:" {print $2}' | tail -n 1)"
           if [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
@@ -252,10 +635,10 @@ jobs:
         run: |
           mkdir -p dist/release
           jq -n \
-            --arg managerDigest "${{ steps.manager.outputs.digest }}" \
-            --arg importerDigest "${{ steps.importer.outputs.digest }}" \
-            --arg runtimeCPUDigest "${{ steps.runtime-cpu.outputs.digest }}" \
-            --arg runtimeCUDADigest "${{ steps.runtime-cuda.outputs.digest }}" '{
+            --arg managerDigest "${MANAGER_DIGEST}" \
+            --arg importerDigest "${IMPORTER_DIGEST}" \
+            --arg runtimeCPUDigest "${RUNTIME_CPU_DIGEST}" \
+            --arg runtimeCUDADigest "${RUNTIME_CUDA_DIGEST}" '{
               image: {repository: "ghcr.io/tannerburns/kama-manager", digest: $managerDigest},
               importer: {image: {repository: "ghcr.io/tannerburns/kama-importer", digest: $importerDigest}},
               runtime: {
@@ -263,7 +646,7 @@ jobs:
                 cuda: {image: {repository: "ghcr.io/tannerburns/kama-runtime-cuda", digest: $runtimeCUDADigest}}
               }
             }' >dist/release/immutable-values.json
-          ./bin/helm template kama "dist/kama-${{ steps.metadata.outputs.version }}.tgz" \
+          ./bin/helm template kama "dist/kama-${RELEASE_VERSION}.tgz" \
             --namespace kama-system \
             --values dist/release/immutable-values.json >/dev/null
 
@@ -271,17 +654,17 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/sbom
-          ./bin/syft "registry:${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}" \
+          ./bin/syft "registry:${MANAGER_IMAGE}@${MANAGER_DIGEST}" \
             --output spdx-json=dist/sbom/kama-manager.spdx.json
-          ./bin/syft "registry:${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}" \
+          ./bin/syft "registry:${IMPORTER_IMAGE}@${IMPORTER_DIGEST}" \
             --output spdx-json=dist/sbom/kama-importer.spdx.json
-          ./bin/syft "registry:${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}" \
+          ./bin/syft "registry:${FIXTURES_IMAGE}@${FIXTURES_DIGEST}" \
             --output spdx-json=dist/sbom/kama-test-fixtures.spdx.json
-          ./bin/syft "registry:${RUNTIME_CPU_IMAGE}@${{ steps.runtime-cpu.outputs.digest }}" \
+          ./bin/syft "registry:${RUNTIME_CPU_IMAGE}@${RUNTIME_CPU_DIGEST}" \
             --output spdx-json=dist/sbom/kama-runtime-cpu.spdx.json
-          ./bin/syft "registry:${RUNTIME_CUDA_IMAGE}@${{ steps.runtime-cuda.outputs.digest }}" \
+          ./bin/syft "registry:${RUNTIME_CUDA_IMAGE}@${RUNTIME_CUDA_DIGEST}" \
             --output spdx-json=dist/sbom/kama-runtime-cuda.spdx.json
-          ./bin/syft "file:dist/kama-${{ steps.metadata.outputs.version }}.tgz" \
+          ./bin/syft "file:dist/kama-${RELEASE_VERSION}.tgz" \
             --output spdx-json=dist/sbom/kama-chart.spdx.json
 
       - name: Sign immutable digests and attach SBOM attestations
@@ -289,11 +672,11 @@ jobs:
         env:
           COSIGN_YES: "true"
         run: |
-          manager_ref="${MANAGER_IMAGE}@${{ steps.manager.outputs.digest }}"
-          importer_ref="${IMPORTER_IMAGE}@${{ steps.importer.outputs.digest }}"
-          fixtures_ref="${FIXTURES_IMAGE}@${{ steps.fixtures.outputs.digest }}"
-          runtime_cpu_ref="${RUNTIME_CPU_IMAGE}@${{ steps.runtime-cpu.outputs.digest }}"
-          runtime_cuda_ref="${RUNTIME_CUDA_IMAGE}@${{ steps.runtime-cuda.outputs.digest }}"
+          manager_ref="${MANAGER_IMAGE}@${MANAGER_DIGEST}"
+          importer_ref="${IMPORTER_IMAGE}@${IMPORTER_DIGEST}"
+          fixtures_ref="${FIXTURES_IMAGE}@${FIXTURES_DIGEST}"
+          runtime_cpu_ref="${RUNTIME_CPU_IMAGE}@${RUNTIME_CPU_DIGEST}"
+          runtime_cuda_ref="${RUNTIME_CUDA_IMAGE}@${RUNTIME_CUDA_DIGEST}"
           chart_ref="${CHART_REPOSITORY}/kama@${{ steps.chart.outputs.digest }}"
 
           ./bin/cosign sign "${manager_ref}"
@@ -313,7 +696,7 @@ jobs:
       - name: Upload release evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-${{ steps.metadata.outputs.version }}
+          name: release-${{ needs.metadata.outputs.version }}
           path: |
             dist/kama-*.tgz
             dist/release/immutable-values.json

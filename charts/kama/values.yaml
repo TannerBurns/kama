@@ -49,7 +49,7 @@ runtime:
   # or objects with a name field.
   imagePullSecrets: []
   # The controller and both runtime images must agree on this exact build.
-  llamaCommit: af6528e6df5d798f7f1363ec1141699be0f638e2
+  llamaCommit: b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45
 
 imagePullSecrets: []
 nameOverride: ""

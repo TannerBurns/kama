@@ -50,7 +50,7 @@ const (
 	testRuntimeCPUImage  = "example.invalid/kama-runtime-cpu:test"
 	testRuntimeCUDAImage = "example.invalid/kama-runtime-cuda:test"
 	testRuntimeClassName = "cuda-runtime"
-	testLlamaCommit      = "af6528e6df5d798f7f1363ec1141699be0f638e2"
+	testLlamaCommit      = "b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45"
 	testServingModelName = "model"
 	testReplacementModel = "replacement-model"
 	testModelRefCase     = "model reference"

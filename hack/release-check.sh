@@ -148,6 +148,7 @@ makefile="${repo_root}/Makefile"
 evidence_verifier="${repo_root}/hack/verify-m2-acceptance-evidence.sh"
 evidence_contract_tests="${repo_root}/hack/test-m2-acceptance-evidence-contracts.sh"
 preinstalled_contract_tests="${repo_root}/hack/test-e2e-serving-nvidia-preinstalled.sh"
+published_image_contract_tests="${repo_root}/hack/test-verify-published-release-image.sh"
 if ! grep -Fq 'https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$(KUBECTL_ARCH)/kubectl' \
   "${makefile}" || ! grep -Fq 'sha256sum --check --strict' "${makefile}"; then
   echo "Makefile does not install checksum-verified, version-matched kubectl binaries" >&2
@@ -163,6 +164,10 @@ if [[ ! -f "${evidence_contract_tests}" ]]; then
 fi
 if [[ ! -f "${preinstalled_contract_tests}" ]]; then
   echo "M2 NVIDIA preinstalled-controller regression tests are missing" >&2
+  exit 1
+fi
+if [[ ! -f "${published_image_contract_tests}" ]]; then
+  echo "published release image verification regression tests are missing" >&2
   exit 1
 fi
 if ! grep -Fq 'nvidia_service_contract="$(<"${repo_root}/hack/m2-nvidia-service-contract.jq")"' \
@@ -181,6 +186,7 @@ if ! grep -Fq 'nvidia_storage_contract="$(<"${repo_root}/hack/m2-nvidia-storage-
 fi
 bash "${evidence_contract_tests}" >/dev/null
 bash "${preinstalled_contract_tests}" >/dev/null
+bash "${published_image_contract_tests}" >/dev/null
 for mode in cpu nvidia; do
   target="verify-e2e-serving-${mode}-evidence"
   if ! grep -Fq ".PHONY: ${target}" "${makefile}" ||
@@ -286,8 +292,8 @@ fi
 builder_ref="docker.io/library/golang:${go_version}-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2"
 for dockerfile in "${repo_root}/Dockerfile" "${repo_root}/Dockerfile.importer" \
   "${repo_root}/Dockerfile.test-fixtures"; do
-  if ! grep -Fq "FROM ${builder_ref} AS builder" "${dockerfile}"; then
-    echo "${dockerfile} does not use the approved digest-pinned Go builder" >&2
+  if ! grep -Fq "FROM --platform=\$BUILDPLATFORM ${builder_ref} AS builder" "${dockerfile}"; then
+    echo "${dockerfile} does not use the approved native digest-pinned Go builder" >&2
     exit 1
   fi
 done
@@ -307,8 +313,8 @@ for dockerfile in "${runtime_cpu_dockerfile}" "${runtime_cuda_dockerfile}"; do
     echo "${dockerfile} does not match the pinned llama.cpp source identity" >&2
     exit 1
   fi
-  if ! grep -Fq "FROM ${builder_ref} AS supervisor-builder" "${dockerfile}"; then
-    echo "${dockerfile} does not use the approved digest-pinned Go supervisor builder" >&2
+  if ! grep -Fq "FROM --platform=\$BUILDPLATFORM ${builder_ref} AS supervisor-builder" "${dockerfile}"; then
+    echo "${dockerfile} does not use the approved native digest-pinned Go supervisor builder" >&2
     exit 1
   fi
   require_exact_count 1 "FROM ${builder_ref} AS apt-tls" "${dockerfile}"
@@ -367,13 +373,57 @@ if ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES ?= ${cuda_architectures}" "${repo_root
   echo "CUDA architecture coverage does not keep full release builds and bounded PR validation" >&2
   exit 1
 fi
-release_publish_timeout="$(awk '
-  $0 == "  publish:" { in_publish = 1; next }
-  in_publish && $0 ~ /^  [[:alnum:]_-]+:$/ { exit }
-  in_publish && $1 == "timeout-minutes:" { print $2; exit }
-' "${release_workflow}")"
-if [[ "${release_publish_timeout}" != "360" ]]; then
-  echo "release publish timeout must be 360 minutes for the full CUDA architecture build" >&2
+release_job_block() {
+  local job=$1
+  awk -v job="${job}" '
+    $0 == "  " job ":" { in_job = 1; next }
+    in_job && $0 ~ /^  [[:alnum:]_-]+:$/ { exit }
+    in_job { print }
+  ' "${release_workflow}"
+}
+
+for job in manager importer fixtures runtime_cpu runtime_cuda; do
+  block="$(release_job_block "${job}")"
+  if [[ -z "${block}" ]] ||
+    ! grep -Fq 'needs: metadata' <<<"${block}" ||
+    ! grep -Fq 'digest: ${{ steps.verify.outputs.digest }}' <<<"${block}" ||
+    ! grep -Fq 'BUILD_DIGEST: ${{ steps.build.outputs.digest }}' <<<"${block}" ||
+    ! grep -Fq 'ref: ${{ needs.metadata.outputs.commit }}' <<<"${block}" ||
+    ! grep -Fq 'VCS_REF=${{ needs.metadata.outputs.commit }}' <<<"${block}" ||
+    ! grep -Fq 'bash hack/verify-published-release-image.sh' <<<"${block}" ||
+    ! grep -Fq 'provenance: mode=max' <<<"${block}"; then
+    echo "release ${job} job must independently publish and verify a provenance-bearing digest from validated source" >&2
+    exit 1
+  fi
+done
+
+require_exact_count 6 'if: github.run_attempt != 1' "${release_workflow}"
+if ! grep -Fq 'assert_tag_absent()' "${release_workflow}" ||
+  ! grep -Fq 'tannerburns/charts/kama' "${release_workflow}" ||
+  ! grep -Fq 'git merge-base --is-ancestor "${commit}" refs/remotes/origin/main' "${release_workflow}"; then
+  echo "release metadata must fail closed on reused tags and non-main source commits" >&2
+  exit 1
+fi
+
+runtime_cuda_block="$(release_job_block runtime_cuda)"
+if ! grep -Fq 'timeout-minutes: 360' <<<"${runtime_cuda_block}"; then
+  echo "release CUDA build timeout must be 360 minutes for the full architecture build" >&2
+  exit 1
+fi
+
+finalize_block="$(release_job_block finalize)"
+for job in metadata manager importer fixtures runtime_cpu runtime_cuda; do
+  if ! grep -Fq -- "- ${job}" <<<"${finalize_block}"; then
+    echo "release finalization must wait for ${job}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq 'id-token: write' <<<"${finalize_block}"; then
+  echo "release finalization must retain keyless signing authority" >&2
+  exit 1
+fi
+if ! grep -Fq 'ref: ${{ needs.metadata.outputs.commit }}' <<<"${finalize_block}"; then
+  echo "release finalization must use the validated source commit" >&2
   exit 1
 fi
 if ! grep -Fq 'RUNTIME_CPU_PLATFORMS ?= linux/amd64,linux/arm64' "${repo_root}/Makefile" ||
@@ -396,6 +446,8 @@ done
 if ! grep -Fq 'name: Validate published runtime manifests and binaries' "${repo_root}/.github/workflows/release.yml" ||
   ! grep -Fq 'CHECK_IMAGES=1' "${repo_root}/.github/workflows/release.yml" ||
   ! grep -Fq -- '--entrypoint /usr/local/bin/llama-server' "${repo_root}/.github/workflows/release.yml" ||
+  ! grep -Fq 'runtime_cpu_arm64_digest=' "${repo_root}/.github/workflows/release.yml" ||
+  ! grep -Fq 'runtime_cpu_arm64_ref=' "${repo_root}/.github/workflows/release.yml" ||
   ! grep -Fq 'dist/release/immutable-values.json' "${repo_root}/.github/workflows/release.yml"; then
   echo "release workflow does not validate published runtime binaries and record immutable install values" >&2
   exit 1

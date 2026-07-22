@@ -43,6 +43,7 @@ mock_commit="dddddddddddddddddddddddddddddddddddddddd"
 mock_parent_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 mock_child_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 mock_config_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+mock_unrelated_digest="sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 manager_image="ghcr.io/tannerburns/kama-manager@${mock_parent_digest}"
 importer_image="ghcr.io/tannerburns/kama-importer@${mock_parent_digest}"
 fixtures_image="ghcr.io/tannerburns/kama-test-fixtures@${mock_parent_digest}"
@@ -435,10 +436,16 @@ case "${tool}" in
         ! -f "${MOCK_STATE_DIR}/helm-release-present" ]]; then
         printf '{"items":[]}\n'
       else
+        manager_image_id_digest="${MOCK_PARENT_DIGEST}"
+        if [[ "${MOCK_SCENARIO}" == "owned-default-runtime" ]]; then
+          manager_image_id_digest="${MOCK_CHILD_DIGEST}"
+        elif [[ "${MOCK_SCENARIO}" == "unrelated-manager-image-digest" ]]; then
+          manager_image_id_digest="${MOCK_UNRELATED_DIGEST}"
+        fi
         jq -cn \
-        --arg namespace "${MOCK_CONTROLLER_NAMESPACE}" \
-        --arg manager "${MOCK_MANAGER_IMAGE}" \
-        --arg imageID "ghcr.io/tannerburns/kama-manager@${MOCK_CHILD_DIGEST}" '{items: [{
+          --arg namespace "${MOCK_CONTROLLER_NAMESPACE}" \
+          --arg manager "${MOCK_MANAGER_IMAGE}" \
+          --arg imageID "ghcr.io/tannerburns/kama-manager@${manager_image_id_digest}" '{items: [{
           metadata: {namespace: $namespace, name: "kama-manager-mock", uid: "controller-pod-uid"},
           spec: {containers: [{name: "manager", image: $manager}]},
           status: {
@@ -644,6 +651,7 @@ run_scenario() {
   MOCK_PARENT_DIGEST="${mock_parent_digest}" \
   MOCK_CHILD_DIGEST="${mock_child_digest}" \
   MOCK_CONFIG_DIGEST="${mock_config_digest}" \
+  MOCK_UNRELATED_DIGEST="${mock_unrelated_digest}" \
   MOCK_TEST_NAMESPACE="kama-qualification" \
   MOCK_CONTROLLER_NAMESPACE="${controller_namespace}" \
   MOCK_CONTROLLER_DEPLOYMENT="${controller_deployment}" \
@@ -910,6 +918,20 @@ run_scenario() {
     return
   fi
 
+  if [[ "${scenario}" == "unrelated-manager-image-digest" ]]; then
+    if grep -Fq $'kubectl\t-n\tkama-qualification\tcreate\t-f' "${state_dir}/calls.log" ||
+      [[ -s "${state_dir}/deletes.jsonl" ]]; then
+      echo "unrelated manager image digest continued into workload mutation or cleanup deletion" >&2
+      return 1
+    fi
+    if ! grep -Fq 'requires exactly one ready Kama manager Pod running the expected immutable image' \
+      "${state_dir}/stderr.log"; then
+      echo "preinstalled mode did not reject the unrelated manager image digest" >&2
+      return 1
+    fi
+    return
+  fi
+
   jq -e --arg runtimeClass "${configured_runtime_class}" '
     .nvidia.expectedRuntimeClassName == $runtimeClass
   ' "${fixture_root}/dist/e2e/serving-nvidia/identities.json" >/dev/null
@@ -1113,6 +1135,8 @@ test_controller_identity_change() {
   fi
 }
 
+# The owned case reports the signed parent-index digest, matching K3s/containerd;
+# owned-default-runtime retains coverage for a resolved Linux child digest.
 run_scenario owned 23
 run_scenario owned-default-runtime 23
 run_scenario adopted 23
@@ -1124,6 +1148,7 @@ run_scenario adopted-active-pod 1
 run_scenario adopted-active-job 1
 run_scenario replacement 1
 run_scenario runtime-class-mismatch 1
+run_scenario unrelated-manager-image-digest 1
 run_scenario keep-resources 1
 run_scenario proxy-start-timeout 1
 run_scenario suite-owned-existing-controller 1
