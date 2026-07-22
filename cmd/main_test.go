@@ -57,13 +57,15 @@ func TestBuildRuntimeOptions(t *testing.T) {
 	t.Parallel()
 	options, err := buildRuntimeOptions(
 		"registry.example/kama-runtime-cpu:v1", "registry.example/kama-runtime-cuda:v1",
-		string(corev1.PullNever), " first,second ", "af6528e6df5d798f7f1363ec1141699be0f638e2",
+		"nvidia.example", string(corev1.PullNever), " first,second ",
+		"af6528e6df5d798f7f1363ec1141699be0f638e2",
 	)
 	if err != nil {
 		t.Fatalf("buildRuntimeOptions(): %v", err)
 	}
 	if options.CPUImage != "registry.example/kama-runtime-cpu:v1" ||
-		options.CUDAImage != "registry.example/kama-runtime-cuda:v1" || options.PullPolicy != corev1.PullNever {
+		options.CUDAImage != "registry.example/kama-runtime-cuda:v1" ||
+		options.CUDARuntimeClassName != "nvidia.example" || options.PullPolicy != corev1.PullNever {
 		t.Fatalf("runtime options = %+v", options)
 	}
 	if len(options.ImagePullSecrets) != 2 || options.ImagePullSecrets[1].Name != "second" {
@@ -73,15 +75,25 @@ func TestBuildRuntimeOptions(t *testing.T) {
 
 func TestBuildRuntimeOptionsRejectsUnsafeConfiguration(t *testing.T) {
 	t.Parallel()
-	if _, err := buildRuntimeOptions("cpu", "cuda", "Sometimes", "", strings.Repeat("a", 40)); err == nil {
+	if _, err := buildRuntimeOptions("cpu", "cuda", "", "Sometimes", "", strings.Repeat("a", 40)); err == nil {
 		t.Fatal("invalid runtime pull policy was accepted")
 	}
-	if _, err := buildRuntimeOptions("cpu", "cuda", string(corev1.PullIfNotPresent), "", "short"); err == nil {
+	if _, err := buildRuntimeOptions("cpu", "cuda", "", string(corev1.PullIfNotPresent), "", "short"); err == nil {
 		t.Fatal("short llama.cpp commit was accepted")
 	}
 	if _, err := buildRuntimeOptions(
-		"cpu", "cuda", string(corev1.PullIfNotPresent), "NOT_A_SECRET", strings.Repeat("a", 40),
+		"cpu", "cuda", "", string(corev1.PullIfNotPresent), "NOT_A_SECRET", strings.Repeat("a", 40),
 	); err == nil {
 		t.Fatal("invalid runtime image pull Secret name was accepted")
+	}
+	if _, err := buildRuntimeOptions(
+		"cpu", "cuda", "Not_A_RuntimeClass", string(corev1.PullIfNotPresent), "", strings.Repeat("a", 40),
+	); err == nil {
+		t.Fatal("invalid CUDA RuntimeClass name was accepted")
+	}
+	if _, err := buildRuntimeOptions(
+		"cpu", "cuda", strings.Repeat("a", 64), string(corev1.PullIfNotPresent), "", strings.Repeat("a", 40),
+	); err == nil {
+		t.Fatal("CUDA RuntimeClass name with an overlong DNS-1123 label was accepted")
 	}
 }

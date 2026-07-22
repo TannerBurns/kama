@@ -28,6 +28,7 @@ Important values:
 | `importer.hubEndpoint` | `https://huggingface.co` | Operator-wide Hugging Face endpoint; CRs cannot override it |
 | `runtime.cpu.image.repository` | `ghcr.io/tannerburns/kama-runtime-cpu` | Linux amd64/arm64 llama.cpp CPU runtime |
 | `runtime.cuda.image.repository` | `ghcr.io/tannerburns/kama-runtime-cuda` | Linux amd64 CUDA runtime |
+| `runtime.cuda.runtimeClassName` | `""` | Optional RuntimeClass assigned only to accelerator serving Pods |
 | `runtime.imagePullPolicy` | `IfNotPresent` | Pull policy copied to generated serving Pods |
 | `runtime.imagePullSecrets` | `[]` | Secret names copied to generated serving Pods |
 | `runtime.llamaCommit` | `af6528e6df5d798f7f1363ec1141699be0f638e2` | Exact llama.cpp build expected by the controller and runtime |
@@ -37,7 +38,9 @@ Important values:
 
 Empty image tags use the chart `appVersion`; a digest overrides its corresponding
 tag. Runtime references are controller configuration and cannot be overridden by a
-`ModelDeployment`. On upgrade, Helm reads the existing webhook Secret, preserves its CA, signs a
+`ModelDeployment`. Set `runtime.cuda.runtimeClassName` when the cluster requires an
+explicit container runtime handler for NVIDIA workloads; CPU serving Pods never use
+this value. On upgrade, Helm reads the existing webhook Secret, preserves its CA, signs a
 fresh serving leaf, updates both admission CA bundles, and rolls the manager. Keep
 the Secret readable by Helm during upgrades. The manager uses a zero-unavailable
 rolling update and a readiness hold so API-server webhook routing can converge before

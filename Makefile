@@ -181,7 +181,7 @@ test-e2e-serving-cpu: kind kubectl helm ## Run real CPU llama.cpp serving and fa
 	LLAMA_CPP_SOURCE_SHA256="$(LLAMA_CPP_SOURCE_SHA256)" bash hack/test-e2e-serving-cpu.sh
 
 .PHONY: test-e2e-serving-nvidia
-test-e2e-serving-nvidia: ## Run protected one-NVIDIA-GPU serving acceptance against KUBECONFIG.
+test-e2e-serving-nvidia: ## Run strict one-NVIDIA-GPU serving acceptance against KUBECONFIG.
 	VERSION="$(VERSION)" IMG="$(IMG)" IMPORTER_IMG="$(IMPORTER_IMG)" FIXTURES_IMG="$(FIXTURES_IMG)" \
 	RUNTIME_CPU_IMG="$(RUNTIME_CPU_IMG)" RUNTIME_CUDA_IMG="$(RUNTIME_CUDA_IMG)" \
 	LLAMA_CPP_COMMIT="$(LLAMA_CPP_COMMIT)" LLAMA_CPP_BUILD_NUMBER="$(LLAMA_CPP_BUILD_NUMBER)" \

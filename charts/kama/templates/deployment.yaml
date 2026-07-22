@@ -74,6 +74,9 @@ spec:
             - --hub-endpoint={{ .Values.importer.hubEndpoint }}
             - --runtime-cpu-image={{ include "kama.runtimeCPUImage" . }}
             - --runtime-cuda-image={{ include "kama.runtimeCUDAImage" . }}
+            {{- if .Values.runtime.cuda.runtimeClassName }}
+            - --runtime-cuda-runtime-class={{ .Values.runtime.cuda.runtimeClassName }}
+            {{- end }}
             - --runtime-image-pull-policy={{ .Values.runtime.imagePullPolicy }}
             {{- if .Values.runtime.imagePullSecrets }}
             - --runtime-image-pull-secrets={{ include "kama.runtimeImagePullSecrets" . }}

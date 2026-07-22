@@ -49,6 +49,7 @@ import (
 const (
 	testRuntimeCPUImage  = "example.invalid/kama-runtime-cpu:test"
 	testRuntimeCUDAImage = "example.invalid/kama-runtime-cuda:test"
+	testRuntimeClassName = "cuda-runtime"
 	testLlamaCommit      = "af6528e6df5d798f7f1363ec1141699be0f638e2"
 	testServingModelName = "model"
 	testReplacementModel = "replacement-model"
@@ -77,6 +78,7 @@ func TestModelDeploymentCreatesRestrictedCPUWorkload(t *testing.T) {
 		WithStatusSubresource(&kamav1alpha1.ModelDeployment{}, &kamav1alpha1.ModelArtifact{}).
 		WithObjects(modelDeployment, artifact, claim).Build()
 	reconciler := testModelDeploymentReconciler(kubeClient, scheme)
+	reconciler.Runtime.CUDARuntimeClassName = testRuntimeClassName
 
 	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(modelDeployment)}); err != nil {
 		t.Fatalf("Reconcile(): %v", err)
@@ -118,6 +120,9 @@ func TestModelDeploymentCreatesRestrictedCPUWorkload(t *testing.T) {
 	}
 	if _, found := container.Resources.Requests[kamav1alpha1.DefaultAcceleratorResource]; found {
 		t.Fatal("CPU workload contains an accelerator request")
+	}
+	if podSpec.RuntimeClassName != nil {
+		t.Fatalf("CPU workload RuntimeClassName = %q, want unset", *podSpec.RuntimeClassName)
 	}
 	if len(podSpec.Volumes) != 3 || len(container.VolumeMounts) != 3 || !container.VolumeMounts[0].ReadOnly {
 		t.Fatalf("runtime volumes = %+v mounts = %+v", podSpec.Volumes, container.VolumeMounts)
@@ -172,6 +177,7 @@ func TestModelDeploymentAcceleratorInjectsExactlyOneGPU(t *testing.T) {
 		WithStatusSubresource(&kamav1alpha1.ModelDeployment{}, &kamav1alpha1.ModelArtifact{}).
 		WithObjects(modelDeployment, artifact, claim).Build()
 	reconciler := testModelDeploymentReconciler(kubeClient, scheme)
+	reconciler.Runtime.CUDARuntimeClassName = testRuntimeClassName
 	if _, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(modelDeployment)}); err != nil {
 		t.Fatalf("Reconcile(): %v", err)
 	}
@@ -185,8 +191,70 @@ func TestModelDeploymentAcceleratorInjectsExactlyOneGPU(t *testing.T) {
 	limit := container.Resources.Limits[kamav1alpha1.DefaultAcceleratorResource]
 	if container.Image != testRuntimeCUDAImage ||
 		request.Cmp(want) != 0 || limit.Cmp(want) != 0 ||
-		workloads.Items[0].Spec.Template.Spec.NodeSelector[corev1.LabelArchStable] != "amd64" {
+		workloads.Items[0].Spec.Template.Spec.NodeSelector[corev1.LabelArchStable] != "amd64" ||
+		workloads.Items[0].Spec.Template.Spec.RuntimeClassName == nil ||
+		*workloads.Items[0].Spec.Template.Spec.RuntimeClassName != testRuntimeClassName {
 		t.Fatalf("accelerator workload = %+v", workloads.Items[0].Spec.Template.Spec)
+	}
+}
+
+func TestModelDeploymentAcceleratorLeavesRuntimeClassUnsetByDefault(t *testing.T) {
+	t.Parallel()
+	scheme := testScheme(t)
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add apps scheme: %v", err)
+	}
+	if err := discoveryv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add discovery scheme: %v", err)
+	}
+	modelDeployment, artifact, claim := readyServingObjects(kamav1alpha1.ModelDeploymentPlacementAccelerator)
+	kubeClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&kamav1alpha1.ModelDeployment{}, &kamav1alpha1.ModelArtifact{}).
+		WithObjects(modelDeployment, artifact, claim).Build()
+	reconciler := testModelDeploymentReconciler(kubeClient, scheme)
+	if _, err := reconciler.Reconcile(
+		context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(modelDeployment)},
+	); err != nil {
+		t.Fatalf("Reconcile(): %v", err)
+	}
+	var workloads appsv1.DeploymentList
+	if err := kubeClient.List(context.Background(), &workloads); err != nil || len(workloads.Items) != 1 {
+		t.Fatalf("list workload: count=%d err=%v", len(workloads.Items), err)
+	}
+	if workloads.Items[0].Spec.Template.Spec.RuntimeClassName != nil {
+		t.Fatalf(
+			"default accelerator RuntimeClassName = %q, want unset",
+			*workloads.Items[0].Spec.Template.Spec.RuntimeClassName,
+		)
+	}
+}
+
+func TestCUDAConfiguredRuntimeClassChangesOnlyAcceleratorFingerprint(t *testing.T) {
+	t.Parallel()
+	scheme := testScheme(t)
+	for _, mode := range []kamav1alpha1.ModelDeploymentPlacementMode{
+		kamav1alpha1.ModelDeploymentPlacementCPU,
+		kamav1alpha1.ModelDeploymentPlacementAccelerator,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			modelDeployment, artifact, _ := readyServingObjects(mode)
+			reconciler := testModelDeploymentReconciler(nil, scheme)
+			baseline, _, _, _, err := reconciler.desiredRuntime(modelDeployment, artifact)
+			if err != nil {
+				t.Fatalf("baseline desiredRuntime(): %v", err)
+			}
+			reconciler.Runtime.CUDARuntimeClassName = testRuntimeClassName
+			configured, _, _, _, err := reconciler.desiredRuntime(modelDeployment, artifact)
+			if err != nil {
+				t.Fatalf("configured desiredRuntime(): %v", err)
+			}
+			if mode == kamav1alpha1.ModelDeploymentPlacementAccelerator && configured == baseline {
+				t.Fatal("accelerator fingerprint did not change with configured CUDA RuntimeClass")
+			}
+			if mode == kamav1alpha1.ModelDeploymentPlacementCPU && configured != baseline {
+				t.Fatal("CPU fingerprint changed for unused CUDA RuntimeClass")
+			}
+		})
 	}
 }
 

@@ -44,6 +44,8 @@ cuda_version="$(version_value CUDA_VERSION)"
 model_digest="48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201"
 model_revision="593b5a2e04c8f3e4ee880263f93e0bd2901ad47f"
 model_size=386404992
+nvidia_service_contract="$(<"${repo_root}/hack/m2-nvidia-service-contract.jq")"
+nvidia_storage_contract="$(<"${repo_root}/hack/m2-nvidia-storage-contract.jq")"
 
 require_file() {
   local path="${evidence_dir}/$1"
@@ -371,6 +373,7 @@ verify_nvidia() {
     client-pod.json
     cuda-runtime.json
     supervisor-state.json
+    storage.json
     modeldeployment.json
     workload.json
     pods.json
@@ -398,12 +401,40 @@ verify_nvidia() {
     --arg modelDigest "${model_digest}" \
     --argjson modelSize "${model_size}"
   assert_json identities.json "all canonical image roles and verified CUDA runtime" '
+    def valid_runtime_class_name:
+      type == "string" and length <= 253 and
+      (. == "" or
+        ((split(".") | length) > 0 and
+          all(split(".")[]; test("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$"))));
     (.images.importer | test("^ghcr\\.io/tannerburns/kama-importer@sha256:[a-f0-9]{64}$")) and
     (.images.servingClient | test("^ghcr\\.io/tannerburns/kama-test-fixtures@sha256:[a-f0-9]{64}$")) and
     (.images.runtimeCPU | test("^ghcr\\.io/tannerburns/kama-runtime-cpu@sha256:[a-f0-9]{64}$")) and
     (.images.runtimeCUDA | test("^ghcr\\.io/tannerburns/kama-runtime-cuda@sha256:[a-f0-9]{64}$")) and
+    (.controller.mode == "suite-owned" or .controller.mode == "preinstalled") and
+    (.controller.namespace | test("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")) and
+    (.controller.deployment | test("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")) and
+    (.controller.testNamespace | test("^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")) and
+    (.controller.deploymentUID | type == "string" and length > 0) and
+    (.controller.podUID | type == "string" and length > 0) and
+    (.controller.observedGeneration | type == "number" and . > 0) and
+    (if .controller.mode == "preinstalled"
+      then .controller.preinstalledVerified == true and
+        .controller.namespace != .controller.testNamespace
+      else .controller.preinstalledVerified == false and
+        .controller.namespace == .controller.testNamespace
+      end) and
+    (if .storage.mode == "existingClaim" then
+      .controller.mode == "preinstalled" and
+      (.storage.adoptedClaim.name | type == "string" and length > 0) and
+      (.storage.adoptedClaim.uid | type == "string" and length > 0) and
+      (.storage.adoptedClaim.volumeName | type == "string" and length > 0) and
+      (.storage.adoptedClaim.volumeUID | type == "string" and length > 0)
+    else
+      .storage.mode == "claimTemplate" and .storage.adoptedClaim == null
+    end) and
     .nvidia.expectedDriverVersion == .nvidia.observedDriverVersion and
     .nvidia.expectedCUDAVersion == $cuda and .nvidia.observedCUDAVersion == $cuda and
+    (.nvidia.expectedRuntimeClassName | valid_runtime_class_name) and
     (.nvidia.observedDevice | type == "string" and length > 0) and
     (.nvidia.observedDeviceUUID | type == "string" and length > 0) and
     .runtimeImageProvenance.verified == true and
@@ -433,12 +464,25 @@ verify_nvidia() {
     all(.images[]; .signatureVerified == true and .sbomAttestationVerified == true)
   '
   assert_json qualification.json "NVIDIA supply chain and supported Kubernetes minor" '
-    .supplyChainVerified == true and .kubernetesMinorVerified == true
+    .supplyChainVerified == true and .kubernetesMinorVerified == true and
+    .cleanupComplete == true and .retainedStorageVerified == true
   '
   assert_json kubernetes-version.json "supported Kubernetes API server minor" '
     .serverVersion.major == "1" and
     ((.serverVersion.minor | sub("[+]$"; "")) | IN("34", "35", "36"))
   '
+  assert_json storage.json "bound cache/artifact/PVC/PV identity and retention contract" \
+    "${nvidia_storage_contract}" \
+    --arg mode "$(jq -r '.storage.mode' "${evidence_dir}/identities.json")" \
+    --arg storageClass "$(jq -r '.storage.storageClass' "${evidence_dir}/identities.json")" \
+    --arg namespace "$(jq -r '.controller.testNamespace' "${evidence_dir}/identities.json")" \
+    --arg adoptedClaim "$(jq -r '.storage.adoptedClaim.name // empty' "${evidence_dir}/identities.json")" \
+    --arg adoptedClaimUID "$(jq -r '.storage.adoptedClaim.uid // empty' "${evidence_dir}/identities.json")" \
+    --arg adoptedVolume "$(jq -r '.storage.adoptedClaim.volumeName // empty' "${evidence_dir}/identities.json")" \
+    --arg adoptedVolumeUID "$(jq -r '.storage.adoptedClaim.volumeUID // empty' "${evidence_dir}/identities.json")" \
+    --arg modelDigest "${model_digest}" \
+    --arg modelRevision "${model_revision}" \
+    --argjson modelSize "${model_size}"
   assert_json direct-request.log "complete NVIDIA SSE response" '
     .schemaVersion == 1 and .sseDataEvents > 0 and
     (.generatedContentFragments | type) == "number" and .generatedContentFragments > 0 and
@@ -502,6 +546,11 @@ verify_nvidia() {
     .spec.template.spec.securityContext.runAsGroup == 65532 and
     .spec.template.spec.securityContext.fsGroup == 65532 and
     .spec.template.spec.securityContext.seccompProfile.type == "RuntimeDefault" and
+    (if $runtimeClass == "" then
+      .spec.template.spec.runtimeClassName == null
+    else
+      .spec.template.spec.runtimeClassName == $runtimeClass
+    end) and
     ([.spec.template.spec.containers[] | select(.name == "runtime" and
       .image == $image and .resources.requests["nvidia.com/gpu"] == "1" and
       .resources.limits["nvidia.com/gpu"] == "1" and
@@ -511,24 +560,28 @@ verify_nvidia() {
   ' --arg name "$(jq -r '.status.deploymentRef.name' "${evidence_dir}/modeldeployment.json")" \
     --arg uid "$(jq -r '.status.deploymentRef.uid' "${evidence_dir}/modeldeployment.json")" \
     --arg fingerprint "$(jq -r '.status.runtime.desiredFingerprint' "${evidence_dir}/modeldeployment.json")" \
-    --arg image "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")"
+    --arg image "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")" \
+    --arg runtimeClass "$(jq -r '.nvidia.expectedRuntimeClassName' "${evidence_dir}/identities.json")"
   assert_json pods.json "single ready current NVIDIA Pod with no restart" '
     (.items | length) == 1 and .items[0] as $pod |
     ($pod.metadata.uid | type == "string" and length > 0) and
     ($pod.spec.nodeName | type == "string" and length > 0) and
+    (if $runtimeClass == "" then
+      $pod.spec.runtimeClassName == null
+    else
+      $pod.spec.runtimeClassName == $runtimeClass
+    end) and
     any($pod.status.conditions[]; .type == "Ready" and .status == "True") and
     any($pod.status.containerStatuses[]; .name == "runtime" and .ready == true and
       .restartCount == 0 and .imageID == $image)
-  ' --arg image "$(jq -r '.status.runtime.observedImage' "${evidence_dir}/modeldeployment.json")"
+  ' --arg image "$(jq -r '.status.runtime.observedImage' "${evidence_dir}/modeldeployment.json")" \
+    --arg runtimeClass "$(jq -r '.nvidia.expectedRuntimeClassName' "${evidence_dir}/identities.json")"
   assert_json nodes.json "runtime Pod scheduled to the recorded allocatable GPU node" '
     any(.items[]; .name == $node and ((.gpuCount // "0") | tonumber) > 0 and
       (.gpuProduct | type == "string" and length > 0))
   ' --arg node "$(jq -r '.items[0].spec.nodeName' "${evidence_dir}/pods.json")"
-  assert_json service.json "stable ClusterIP serving Service" '
-    .metadata.name == $name and .metadata.uid == $uid and .spec.type == "ClusterIP" and
-    ([.spec.ports[] | select(.port == 8080 and .targetPort == 8080)] | length) == 1 and
-    ([.spec.ports[] | select(.port == 8081 or .targetPort == 8081)] | length) == 0
-  ' --arg name "$(jq -r '.status.serviceRef.name' "${evidence_dir}/modeldeployment.json")" \
+  assert_json service.json "stable ClusterIP serving Service" "${nvidia_service_contract}" \
+    --arg name "$(jq -r '.status.serviceRef.name' "${evidence_dir}/modeldeployment.json")" \
     --arg uid "$(jq -r '.status.serviceRef.uid' "${evidence_dir}/modeldeployment.json")"
   assert_json endpointslices.json "one ready endpoint for the current NVIDIA Pod" '
     ([.items[].endpoints[]? | select(.conditions.ready == true and .targetRef.kind == "Pod" and

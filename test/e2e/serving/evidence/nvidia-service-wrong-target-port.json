@@ -1,0 +1,17 @@
+{
+  "metadata": {
+    "name": "e2e-serving-nvidia-abc123",
+    "uid": "11111111-2222-3333-4444-555555555555"
+  },
+  "spec": {
+    "type": "ClusterIP",
+    "ports": [
+      {
+        "name": "http",
+        "protocol": "TCP",
+        "port": 8080,
+        "targetPort": "supervisor"
+      }
+    ]
+  }
+}
