@@ -280,7 +280,7 @@ sanitize_evidence() {
     'authorization:|bearer[[:space:]]|hf_[a-z0-9]+|client-key-data:|client-certificate-data:|(^|[[:space:]])token:[[:space:]]|password[=:]' \
     "${evidence_dir}" >"${unsafe_list}" 2>/dev/null || true
   if [[ ! -s "${unsafe_list}" ]]; then
-    return
+    return 0
   fi
 
   credential_safe=0
@@ -1931,7 +1931,7 @@ render_nvidia_storage_manifest() {
       -e "s|E2E_NVIDIA_STORAGE_CLASS|${storage_class}|g" \
       -e "s|E2E_NVIDIA_RUN_ID|${qualification_run_id}|g" \
       "${repo_root}/test/e2e/serving/nvidia-storage.yaml.tmpl" >"${output}"
-    return
+    return 0
   fi
 
   sed \

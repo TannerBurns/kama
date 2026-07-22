@@ -16,6 +16,11 @@ cp "${repo_root}/VERSION" "${fixture_root}/VERSION"
 cp "${repo_root}/hack/versions.mk" "${fixture_root}/hack/versions.mk"
 cp "${repo_root}/hack/test-e2e-serving-nvidia.sh" \
   "${fixture_root}/hack/test-e2e-serving-nvidia.sh"
+if grep -Eq '^[[:space:]]*return[[:space:]]*$' \
+  "${fixture_root}/hack/test-e2e-serving-nvidia.sh"; then
+  echo "NVIDIA harness functions must use explicit return statuses for Bash 5.2 EXIT-trap safety" >&2
+  exit 1
+fi
 cp "${repo_root}/test/e2e/serving/nvidia-storage.yaml.tmpl" \
   "${fixture_root}/test/e2e/serving/nvidia-storage.yaml.tmpl"
 cp "${repo_root}/test/e2e/serving/nvidia-existing-cache.yaml.tmpl" \
@@ -951,7 +956,7 @@ run_scenario() {
 
   if [[ "${scenario}" == "owned" || "${scenario}" == "owned-default-runtime" ||
     "${scenario}" == "adopted" ]]; then
-    jq -se '
+    if ! jq -se '
       length == 2 and
       all(.[];
         (.pending | startswith("PENDING: NVIDIA suite cleanup")) and
@@ -961,7 +966,12 @@ run_scenario() {
         .body.propagationPolicy == "Foreground") and
       ([.[].body.preconditions.uid] | sort) ==
         (["artifact-uid-original", "cache-uid-original"] | sort)
-    ' "${state_dir}/deletes.jsonl" >/dev/null
+    ' "${state_dir}/deletes.jsonl" >/dev/null; then
+      echo "${scenario}: cleanup deletion evidence did not match the expected UID-safe contract" >&2
+      sed -n '1,20p' "${state_dir}/deletes.jsonl" >&2
+      sed -n '1,80p' "${state_dir}/stderr.log" >&2
+      return 1
+    fi
     jq -e '
       .outcome == "FAIL (exit 23)" and .qualifying == false
     ' "${fixture_root}/dist/e2e/serving-nvidia/qualification.json" >/dev/null
