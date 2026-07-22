@@ -24,6 +24,19 @@ make_version() {
   awk -v name="${name}" '$1 == name && $2 == ":=" { print $3 }' "${versions_file}"
 }
 
+require_exact_count() {
+  local expected=$1
+  local pattern=$2
+  local file=$3
+  local count
+
+  count="$(grep -Fc -- "${pattern}" "${file}" || true)"
+  if [[ "${count}" -ne "${expected}" ]]; then
+    echo "${file} contains ${count} occurrences of ${pattern}; expected ${expected}" >&2
+    exit 1
+  fi
+}
+
 go_version="$(make_version GO_VERSION)"
 kubebuilder_version="$(make_version KUBEBUILDER_VERSION)"
 controller_runtime_version="$(make_version CONTROLLER_RUNTIME_VERSION)"
@@ -184,7 +197,9 @@ nvidia_workflow="${repo_root}/.github/workflows/e2e-nvidia.yml"
 release_workflow="${repo_root}/.github/workflows/release.yml"
 if ! grep -Fq 'make verify-e2e-serving-cpu-evidence K8S_MINOR=${{ matrix.kubernetes }}' "${kind_workflow}" ||
   ! grep -Fq 'name: M2 CPU/Kind acceptance' "${kind_workflow}" ||
-  ! grep -Fq 'make verify-e2e-serving-cpu-evidence K8S_MINOR=1.36' "${e2e_workflow}"; then
+  ! grep -Fq 'make verify-e2e-serving-cpu-evidence K8S_MINOR=1.36' "${e2e_workflow}" ||
+  ! grep -Fq "if: \${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}" \
+    "${e2e_workflow}"; then
   echo "hosted workflows do not enforce the M2 CPU evidence gates" >&2
   exit 1
 fi
@@ -216,6 +231,13 @@ for serving_suite in "${cpu_suite}" "${nvidia_suite}"; do
     exit 1
   fi
 done
+require_exact_count 1 \
+  '"max_tokens":256,"ignore_eos":true,"stream":true' "${cpu_suite}"
+if ! grep -Fq 'run: make helm supply-chain-tools' "${release_workflow}" ||
+  grep -Fq 'run: make bootstrap supply-chain-tools' "${release_workflow}"; then
+  echo "release workflow installs unused bootstrap tools" >&2
+  exit 1
+fi
 for contract in \
   'verify_supply_chain()' \
   '"${cosign_bin}" verify' \
@@ -289,6 +311,20 @@ for dockerfile in "${runtime_cpu_dockerfile}" "${runtime_cuda_dockerfile}"; do
     echo "${dockerfile} does not use the approved digest-pinned Go supervisor builder" >&2
     exit 1
   fi
+  require_exact_count 1 "FROM ${builder_ref} AS apt-tls" "${dockerfile}"
+  require_exact_count 2 \
+    'COPY --from=apt-tls /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt' \
+    "${dockerfile}"
+  require_exact_count 2 \
+    "s|http://archive.ubuntu.com|https://archive.ubuntu.com|g" "${dockerfile}"
+  require_exact_count 2 \
+    "s|http://security.ubuntu.com|https://security.ubuntu.com|g" "${dockerfile}"
+  require_exact_count 2 \
+    "s|http://ports.ubuntu.com|https://ports.ubuntu.com|g" "${dockerfile}"
+  require_exact_count 2 'Acquire::Retries "5";' "${dockerfile}"
+  require_exact_count 2 'Acquire::http::Timeout "30";' "${dockerfile}"
+  require_exact_count 2 'Acquire::https::Timeout "30";' "${dockerfile}"
+  require_exact_count 2 'apt-get update' "${dockerfile}"
 done
 if ! grep -Fq \
   'FROM docker.io/library/ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982' \

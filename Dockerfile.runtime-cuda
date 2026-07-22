@@ -6,6 +6,8 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+FROM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS apt-tls
+
 FROM docker.io/nvidia/cuda:12.4.1-devel-ubuntu22.04@sha256:da6791294b0b04d7e65d87b7451d6f2390b4d36225ab0701ee7dfec5769829f5 AS llama-builder
 
 ARG LLAMA_CPP_COMMIT=af6528e6df5d798f7f1363ec1141699be0f638e2
@@ -18,7 +20,19 @@ ARG SOURCE_DATE_EPOCH=0
 ENV DEBIAN_FRONTEND=noninteractive \
     SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
-RUN apt-get update \
+COPY --from=apt-tls /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+RUN sed -i \
+      -e 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g' \
+      -e 's|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+      -e 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' \
+      /etc/apt/sources.list \
+    && printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "30";' \
+      'Acquire::https::Timeout "30";' \
+      > /etc/apt/apt.conf.d/80-kama-network \
+    && apt-get update \
     && apt-get install --no-install-recommends -y \
       build-essential \
       ca-certificates \
@@ -101,7 +115,19 @@ LABEL org.opencontainers.image.title="Kama CUDA runtime" \
 
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64
 
-RUN apt-get update \
+COPY --from=apt-tls /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+RUN sed -i \
+      -e 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g' \
+      -e 's|http://security.ubuntu.com|https://security.ubuntu.com|g' \
+      -e 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' \
+      /etc/apt/sources.list \
+    && printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "30";' \
+      'Acquire::https::Timeout "30";' \
+      > /etc/apt/apt.conf.d/80-kama-network \
+    && apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates libgomp1 libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
