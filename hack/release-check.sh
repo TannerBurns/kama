@@ -351,8 +351,17 @@ if ! grep -Fq -- '-DGGML_NATIVE=OFF' "${runtime_cpu_dockerfile}"; then
   echo "CPU runtime must disable host-native llama.cpp optimizations" >&2
   exit 1
 fi
+release_job_block() {
+  local job=$1
+  awk -v job="${job}" '
+    $0 == "  " job ":" { in_job = 1; next }
+    in_job && $0 ~ /^  [[:alnum:]_-]+:$/ { exit }
+    in_job { print }
+  ' "${release_workflow}"
+}
+
 cuda_architectures='60;61;70;75;80;86;89;90'
-ci_cuda_architectures='60;90'
+ci_cuda_architectures='89'
 if ! grep -Fq "ARG CUDA_ARCHITECTURES=${cuda_architectures}" "${runtime_cuda_dockerfile}" ||
   ! grep -Fq -- '-DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}"' "${runtime_cuda_dockerfile}" ||
   ! grep -Fq -- '-DGGML_NATIVE=OFF' "${runtime_cuda_dockerfile}" ||
@@ -363,25 +372,16 @@ if ! grep -Fq "ARG CUDA_ARCHITECTURES=${cuda_architectures}" "${runtime_cuda_doc
   echo "CUDA runtime does not enforce the approved portable amd64 CUDA build" >&2
   exit 1
 fi
+release_cuda_job="$(release_job_block runtime_cuda)"
 if ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES ?= ${cuda_architectures}" "${repo_root}/Makefile" ||
   ! grep -Fq -- '--build-arg CUDA_ARCHITECTURES="$(RUNTIME_CUDA_ARCHITECTURES)"' \
     "${repo_root}/Makefile" ||
   ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES: \"${ci_cuda_architectures}\"" \
     "${repo_root}/.github/workflows/ci.yml" ||
-  grep -Fq "CUDA_ARCHITECTURES=${ci_cuda_architectures}" \
-    "${repo_root}/.github/workflows/release.yml"; then
+  grep -Fq 'CUDA_ARCHITECTURES' <<<"${release_cuda_job}"; then
   echo "CUDA architecture coverage does not keep full release builds and bounded PR validation" >&2
   exit 1
 fi
-release_job_block() {
-  local job=$1
-  awk -v job="${job}" '
-    $0 == "  " job ":" { in_job = 1; next }
-    in_job && $0 ~ /^  [[:alnum:]_-]+:$/ { exit }
-    in_job { print }
-  ' "${release_workflow}"
-}
-
 for job in manager importer fixtures runtime_cpu runtime_cuda; do
   block="$(release_job_block "${job}")"
   if [[ -z "${block}" ]] ||

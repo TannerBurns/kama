@@ -404,19 +404,19 @@ func TestAcceleratorStartupFactsAndLogRedaction(t *testing.T) {
 		strings.Contains(logs.String(), "24082 MiB") {
 		t.Fatalf("forwarded log exposed child content: %s", logs.String())
 	}
-	if got := sanitizeLogLine("  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)"); got != "accelerator-inventory-observed" {
+	if got := sanitizeLogLine("  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)"); got != acceleratorInventoryLogEvent {
 		t.Fatalf("CUDA inventory log = %q", got)
 	}
-	if got := sanitizeLogLine("cmn  common_param:   - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)"); got != "accelerator-inventory-observed" {
+	if got := sanitizeLogLine("cmn  common_param:   - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)"); got != acceleratorInventoryLogEvent {
 		t.Fatalf("prefixed CUDA inventory log = %q", got)
 	}
-	if got := sanitizeLogLine("  - CPU     : Intel(R) Xeon(R) CPU (193053 MiB, 191000 MiB free)"); got != "output-suppressed" {
+	if got := sanitizeLogLine("  - CPU     : Intel(R) Xeon(R) CPU (193053 MiB, 191000 MiB free)"); got != suppressedLogEvent {
 		t.Fatalf("CPU inventory log = %q", got)
 	}
 	if got := sanitizeLogLine(`request: {"prompt":"private text"}`); got != "sensitive-output-redacted" {
 		t.Fatalf("sensitive log = %q", got)
 	}
-	if got := sanitizeLogLine("user supplied CUDA0: private text"); got != "output-suppressed" {
+	if got := sanitizeLogLine("user supplied CUDA0: private text"); got != suppressedLogEvent {
 		t.Fatalf("unclassified log = %q", got)
 	}
 }

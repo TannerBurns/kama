@@ -51,6 +51,8 @@ const (
 	maximumResponseBytes            = 1 << 20
 	maximumLogFragmentBytes         = 4096
 	diagnosticStatusKey             = "status"
+	acceleratorInventoryLogEvent    = "accelerator-inventory-observed"
+	suppressedLogEvent              = "output-suppressed"
 )
 
 var (
@@ -994,7 +996,7 @@ func sanitizeLogLine(value string) string {
 		}
 	}
 	if cudaCountPattern.MatchString(value) || legacyDevicePattern.MatchString(value) || deviceInventoryPattern.MatchString(value) {
-		return "accelerator-inventory-observed"
+		return acceleratorInventoryLogEvent
 	}
 	if offloadPattern.MatchString(value) {
 		return "accelerator-layer-offload-observed"
@@ -1002,7 +1004,7 @@ func sanitizeLogLine(value string) string {
 	if strings.Contains(lower, "error") || strings.Contains(lower, "failed") {
 		return "error-detail-suppressed"
 	}
-	return "output-suppressed"
+	return suppressedLogEvent
 }
 
 func sanitizeMessage(value string) string {
