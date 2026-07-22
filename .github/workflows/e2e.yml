@@ -146,7 +146,9 @@ jobs:
 
   cpu-serving:
     name: Baseline serving / Kubernetes 1.36 / CPU runtime
-    if: ${{ github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' }}
+    # Main pushes already run this exact suite in the required 1.36 Kind matrix.
+    # Keep an independent periodic lane and an explicit trusted rerun path.
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:

@@ -1220,10 +1220,12 @@ old_pod_uid="$("${kubectl_bin}" -n "${namespace}" get pod "${pod_name}" -o jsonp
   >"${tmp_dir}/drain-service-port-forward.log" 2>&1 &
 port_forward_pids+=("$!")
 wait_for_http http://127.0.0.1:18080/health
+# Keep the stream active after its first token while bounding generation well
+# inside the two-minute drain budget on slower hosted CPU runners.
 curl --no-buffer --fail-with-body --silent --show-error \
   http://127.0.0.1:18080/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"e2e-serving-cpu","messages":[{"role":"user","content":"Count upward for as long as allowed."}],"max_tokens":1024,"ignore_eos":true,"stream":true}' \
+  -d '{"model":"e2e-serving-cpu","messages":[{"role":"user","content":"Count upward for as long as allowed."}],"max_tokens":256,"ignore_eos":true,"stream":true}' \
   --output "${tmp_dir}/drain-sse.txt" &
 stream_pid=$!
 port_forward_pids+=("${stream_pid}")

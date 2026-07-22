@@ -46,7 +46,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Install pinned release tools
-        run: make bootstrap supply-chain-tools
+        run: make helm supply-chain-tools
 
       - name: Validate release tag and source
         id: metadata
