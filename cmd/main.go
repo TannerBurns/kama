@@ -70,7 +70,8 @@ func main() {
 	var enableWebhooks bool
 	var showVersion bool
 	var importerImage, importerPullPolicy, importerPullSecrets, hubEndpoint string
-	var runtimeCPUImage, runtimeCUDAImage, runtimePullPolicy, runtimePullSecrets, llamaCommit string
+	var runtimeCPUImage, runtimeCUDAImage, runtimeCUDARuntimeClass string
+	var runtimePullPolicy, runtimePullSecrets, llamaCommit string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -103,6 +104,8 @@ func main() {
 		"Controller-owned CPU llama.cpp runtime image.")
 	flag.StringVar(&runtimeCUDAImage, "runtime-cuda-image", "ghcr.io/tannerburns/kama-runtime-cuda:dev",
 		"Controller-owned single-GPU CUDA llama.cpp runtime image.")
+	flag.StringVar(&runtimeCUDARuntimeClass, "runtime-cuda-runtime-class", "",
+		"Optional RuntimeClass name assigned only to CUDA ModelDeployment Pods.")
 	flag.StringVar(&runtimePullPolicy, "runtime-image-pull-policy", string(corev1.PullIfNotPresent),
 		"Image pull policy used by ModelDeployment Pods.")
 	flag.StringVar(&runtimePullSecrets, "runtime-image-pull-secrets", "",
@@ -235,7 +238,8 @@ func main() {
 		os.Exit(1)
 	}
 	runtimeOptions, err := buildRuntimeOptions(
-		runtimeCPUImage, runtimeCUDAImage, runtimePullPolicy, runtimePullSecrets, llamaCommit,
+		runtimeCPUImage, runtimeCUDAImage, runtimeCUDARuntimeClass,
+		runtimePullPolicy, runtimePullSecrets, llamaCommit,
 	)
 	if err != nil {
 		setupLog.Error(err, "Invalid runtime configuration")
@@ -314,7 +318,7 @@ func buildImporterOptions(
 }
 
 func buildRuntimeOptions(
-	cpuImage, cudaImage, pullPolicy, pullSecrets, llamaCommit string,
+	cpuImage, cudaImage, cudaRuntimeClass, pullPolicy, pullSecrets, llamaCommit string,
 ) (artifactcontroller.RuntimeOptions, error) {
 	policy := corev1.PullPolicy(pullPolicy)
 	switch policy {
@@ -323,7 +327,8 @@ func buildRuntimeOptions(
 		return artifactcontroller.RuntimeOptions{}, fmt.Errorf("unsupported runtime image pull policy %q", pullPolicy)
 	}
 	options := artifactcontroller.RuntimeOptions{
-		CPUImage: cpuImage, CUDAImage: cudaImage, PullPolicy: policy, LlamaCommit: llamaCommit,
+		CPUImage: cpuImage, CUDAImage: cudaImage, CUDARuntimeClassName: cudaRuntimeClass,
+		PullPolicy: policy, LlamaCommit: llamaCommit,
 	}
 	for name := range strings.SplitSeq(pullSecrets, ",") {
 		if name = strings.TrimSpace(name); name != "" {

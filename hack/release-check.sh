@@ -133,6 +133,8 @@ fi
 
 makefile="${repo_root}/Makefile"
 evidence_verifier="${repo_root}/hack/verify-m2-acceptance-evidence.sh"
+evidence_contract_tests="${repo_root}/hack/test-m2-acceptance-evidence-contracts.sh"
+preinstalled_contract_tests="${repo_root}/hack/test-e2e-serving-nvidia-preinstalled.sh"
 if ! grep -Fq 'https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$(KUBECTL_ARCH)/kubectl' \
   "${makefile}" || ! grep -Fq 'sha256sum --check --strict' "${makefile}"; then
   echo "Makefile does not install checksum-verified, version-matched kubectl binaries" >&2
@@ -142,6 +144,30 @@ if [[ ! -x "${evidence_verifier}" ]]; then
   echo "M2 acceptance evidence verifier is missing or not executable" >&2
   exit 1
 fi
+if [[ ! -f "${evidence_contract_tests}" ]]; then
+  echo "M2 acceptance evidence contract regression tests are missing" >&2
+  exit 1
+fi
+if [[ ! -f "${preinstalled_contract_tests}" ]]; then
+  echo "M2 NVIDIA preinstalled-controller regression tests are missing" >&2
+  exit 1
+fi
+if ! grep -Fq 'nvidia_service_contract="$(<"${repo_root}/hack/m2-nvidia-service-contract.jq")"' \
+  "${evidence_verifier}" ||
+  ! grep -Fq 'assert_json service.json "stable ClusterIP serving Service" "${nvidia_service_contract}"' \
+    "${evidence_verifier}"; then
+  echo "M2 NVIDIA evidence verifier is not using the regression-tested Service contract" >&2
+  exit 1
+fi
+if ! grep -Fq 'nvidia_storage_contract="$(<"${repo_root}/hack/m2-nvidia-storage-contract.jq")"' \
+  "${evidence_verifier}" ||
+  ! grep -Fq 'assert_json storage.json "bound cache/artifact/PVC/PV identity and retention contract"' \
+    "${evidence_verifier}"; then
+  echo "M2 NVIDIA evidence verifier is not using the regression-tested storage contract" >&2
+  exit 1
+fi
+bash "${evidence_contract_tests}" >/dev/null
+bash "${preinstalled_contract_tests}" >/dev/null
 for mode in cpu nvidia; do
   target="verify-e2e-serving-${mode}-evidence"
   if ! grep -Fq ".PHONY: ${target}" "${makefile}" ||
@@ -169,6 +195,7 @@ if ! grep -Fq 'require_private_hf:' "${e2e_workflow}" ||
 fi
 if ! grep -Fq 'runs-on: [self-hosted, Linux, X64, kama-nvidia]' "${nvidia_workflow}" ||
   ! grep -Fq 'run: make helm cosign' "${nvidia_workflow}" ||
+  ! grep -Fq 'E2E_NVIDIA_RUNTIME_CLASS: ${{ vars.E2E_NVIDIA_RUNTIME_CLASS }}' "${nvidia_workflow}" ||
   ! grep -Fq 'run: make verify-e2e-serving-nvidia-evidence' "${nvidia_workflow}" ||
   ! grep -Fq 'name: Protected NVIDIA acceptance gate' "${nvidia_workflow}" ||
   ! grep -Fq 'rm -f -- "${KUBECONFIG_PATH}"' "${nvidia_workflow}"; then
@@ -196,6 +223,25 @@ for contract in \
   '--type spdxjson' \
   'kubernetesMinorVerified' \
   'expected_repository="ghcr.io/tannerburns/kama-runtime-cuda"' \
+  'E2E_NVIDIA_PREINSTALLED_CONTROLLER' \
+  'E2E_NVIDIA_USE_EXISTING_NAMESPACE' \
+  'E2E_NVIDIA_EXISTING_CACHE_CLAIM' \
+  'E2E_NVIDIA_RUNTIME_CLASS' \
+  'runtime.cuda.runtimeClassName=${runtime_class}' \
+  '--runtime-cuda-runtime-class=' \
+  'get runtimeclass "${runtime_class}" -o json' \
+  'verify_preinstalled_controller()' \
+  'verify_no_existing_controller()' \
+  'signed_linux_manifest_digests()' \
+  'status --porcelain=v1 --untracked-files=all' \
+  'preconditions: {uid: $uid}' \
+  'PENDING: NVIDIA suite cleanup has not completed' \
+  'cleanupComplete' \
+  'retainedStorageVerified' \
+  'release_attempted=1' \
+  '--atomic --wait --timeout 5m' \
+  'verify_no_gate_residuals()' \
+  'delete_owned_namespace()' \
   "dpkg-query -W" \
   'ldd /usr/local/bin/llama-server' \
   'libcudart\.so\.12' \
@@ -363,6 +409,30 @@ if ! grep -Fq "ghcr.io/tannerburns/kama-runtime-cpu:${version}" <<<"${rendered}"
 fi
 if ! grep -Fq "ghcr.io/tannerburns/kama-runtime-cuda:${version}" <<<"${rendered}"; then
   echo "chart's default CUDA runtime image tag does not match VERSION ${version}" >&2
+  exit 1
+fi
+if grep -Fq -- "--runtime-cuda-runtime-class=" <<<"${rendered}"; then
+  echo "chart unexpectedly configures a CUDA RuntimeClass by default" >&2
+  exit 1
+fi
+runtime_class_rendered="$("${helm_bin}" template kama "${chart_package}" \
+  --namespace kama-system \
+  --set runtime.cuda.runtimeClassName=nvidia)"
+if ! grep -Fq -- "--runtime-cuda-runtime-class=nvidia" <<<"${runtime_class_rendered}"; then
+  echo "chart does not render the configured CUDA RuntimeClass" >&2
+  exit 1
+fi
+if "${helm_bin}" template kama "${chart_package}" \
+  --namespace kama-system \
+  --set runtime.cuda.runtimeClassName=Not_A_RuntimeClass >/dev/null 2>&1; then
+  echo "chart accepts an invalid CUDA RuntimeClass name" >&2
+  exit 1
+fi
+overlong_runtime_class="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+if "${helm_bin}" template kama "${chart_package}" \
+  --namespace kama-system \
+  --set runtime.cuda.runtimeClassName="${overlong_runtime_class}" >/dev/null 2>&1; then
+  echo "chart accepts a CUDA RuntimeClass name with an overlong DNS-1123 label" >&2
   exit 1
 fi
 if ! grep -Fq -- "--llama-commit=${llama_cpp_commit}" <<<"${rendered}"; then

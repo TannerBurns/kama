@@ -2,6 +2,8 @@ apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelCache
 metadata:
   name: e2e-serving-nvidia-cache
+  labels:
+    kama.tannerburns.github.io/e2e-run: E2E_NVIDIA_RUN_ID
 spec:
   retentionPolicy: Delete
   storage:
@@ -19,6 +21,8 @@ apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelArtifact
 metadata:
   name: e2e-serving-nvidia-model
+  labels:
+    kama.tannerburns.github.io/e2e-run: E2E_NVIDIA_RUN_ID
 spec:
   format: GGUF
   entrypoint: smollm2-360m-instruct-q8_0.gguf

@@ -35,12 +35,54 @@ runs a Kubernetes 1.36 CPU regression.
 The CPU production images are built with Buildx, identified and verified by their
 manifest digests and OCI labels, then loaded into each isolated cluster under
 run-local tags with `imagePullPolicy: Never`. Those tags are transport aliases, not
-published image identities. NVIDIA serving runs only from trusted `main` history on
-`[self-hosted, Linux, X64, kama-nvidia]` with a protected kubeconfig. Pull requests
-never receive that kubeconfig or GPU environment, and the NVIDIA workflow is
-manual-only. Both serving suites use a genuinely loadable model and production
-runtime images; the synthetic GGUF and fake
+published image identities. NVIDIA serving qualifies either from trusted `main`
+history on `[self-hosted, Linux, X64, kama-nvidia]` with a protected kubeconfig, or
+through the same strict suite in a trusted local operator environment when no
+protected NVIDIA runner is available. Local orchestration and credentials remain
+outside the repository; `preinstalled` mode can verify a separately installed signed
+controller without owning cluster-scoped resources. Pull requests never receive
+either kubeconfig, and the NVIDIA workflow is manual-only. Both serving suites use a
+genuinely loadable model and production runtime images; the synthetic GGUF and fake
 llama-server remain nonproduction controller fixtures.
+
+Preinstalled mode requires an existing isolated namespace and refuses to continue if
+any fixed-name test resource is present. Resources created by a run carry a random
+ownership label; cleanup verifies that label and the observed UID before deleting
+from a namespace the suite does not own. Trusted local operators must fetch
+`origin/main` immediately before running; the suite rejects dirty source and commits
+that are not ancestors of the fetched remote-tracking ref before it contacts the
+cluster.
+
+Suite-owned mode applies the same UID precondition to its run-labeled namespace,
+tracks partially attempted Helm installs, and refuses namespace teardown when release
+cleanup, fixed-resource deletion, or the residual-resource scan cannot be proved.
+Qualifying evidence records `cleanupComplete=true`; an ownership mismatch preserves
+the replacement resource for manual recovery and fails the gate.
+
+`KEEP_NVIDIA_RESOURCES=1` is a diagnostic-only escape hatch. A run that retains
+resources exits nonzero and writes explicitly non-qualifying evidence.
+
+An operator may set `E2E_NVIDIA_EXISTING_CACHE_CLAIM` only with preinstalled mode and
+an existing namespace. This narrow seam supports an out-of-tree bootstrap that binds a
+disposable RWO claim before the suite runs, including on delayed-binding node-local
+storage. The suite requires the named claim and its PV to be Bound, Filesystem, RWO,
+unowned, unguarded, unused by active Pods or Jobs, and backed by the exact configured
+StorageClass. It then adopts the claim through `ModelCache.spec.storage.existingClaim`
+with `Retain`, verifies the cache and artifact preserve the prevalidated claim/PV
+identity, and proves the claim still exists after gate-owned resources are removed.
+Sanitized evidence cross-checks the ModelCache, ModelArtifact, PVC, and PV UIDs,
+binding, StorageClass, access mode, and read-only serving location.
+The suite never deletes adopted storage; the out-of-tree operator owns its eventual
+cleanup after Kama finalizers and consumers are gone.
+
+Clusters that require an explicit Kubernetes RuntimeClass for NVIDIA containers set
+`E2E_NVIDIA_RUNTIME_CLASS` to its name. The suite verifies that the RuntimeClass
+exists before mutation, configures it through `runtime.cuda.runtimeClassName` for a
+suite-owned controller, or verifies the exact `--runtime-cuda-runtime-class` manager
+argument in preinstalled mode. Qualifying evidence requires both the generated
+Deployment and the running inference Pod to use that exact RuntimeClass. Leave the
+variable empty only when the cluster's default container runtime exposes allocated
+NVIDIA devices.
 
 The NVIDIA runner should be ephemeral; if that is not possible, its runner group and
 cluster credentials must be limited to this repository. Configure the protected

@@ -81,11 +81,12 @@ const (
 // RuntimeOptions configure the controller-owned serving images and immutable
 // llama.cpp build identity. They are deliberately not exposed through the CRD.
 type RuntimeOptions struct {
-	CPUImage         string
-	CUDAImage        string
-	PullPolicy       corev1.PullPolicy
-	ImagePullSecrets []corev1.LocalObjectReference
-	LlamaCommit      string
+	CPUImage             string
+	CUDAImage            string
+	CUDARuntimeClassName string
+	PullPolicy           corev1.PullPolicy
+	ImagePullSecrets     []corev1.LocalObjectReference
+	LlamaCommit          string
 }
 
 type generatedResourceCollisionError struct {
@@ -126,6 +127,20 @@ func (o RuntimeOptions) Validate() error {
 	for _, secret := range o.ImagePullSecrets {
 		if problems := validation.IsDNS1123Subdomain(secret.Name); len(problems) != 0 {
 			return fmt.Errorf("invalid runtime image pull Secret %q: %s", secret.Name, strings.Join(problems, "; "))
+		}
+	}
+	if o.CUDARuntimeClassName != "" {
+		if problems := validation.IsDNS1123Subdomain(o.CUDARuntimeClassName); len(problems) != 0 {
+			return fmt.Errorf(
+				"invalid CUDA RuntimeClass name %q: %s", o.CUDARuntimeClassName, strings.Join(problems, "; "),
+			)
+		}
+		for label := range strings.SplitSeq(o.CUDARuntimeClassName, ".") {
+			if problems := validation.IsDNS1123Label(label); len(problems) != 0 {
+				return fmt.Errorf(
+					"invalid CUDA RuntimeClass name %q: %s", o.CUDARuntimeClassName, strings.Join(problems, "; "),
+				)
+			}
 		}
 	}
 	return nil
@@ -436,35 +451,39 @@ func (r *ModelDeploymentReconciler) desiredRuntime(
 	artifact *kamav1alpha1.ModelArtifact,
 ) (string, string, kamaruntime.Config, string, error) {
 	image := r.Runtime.CPUImage
+	runtimeClassName := ""
 	if deployment.Spec.Placement.Mode == kamav1alpha1.ModelDeploymentPlacementAccelerator {
 		image = r.Runtime.CUDAImage
+		runtimeClassName = r.Runtime.CUDARuntimeClassName
 	}
 	locationHash, err := operationID(artifact.Status.Location)
 	if err != nil {
 		return "", "", kamaruntime.Config{}, "", fmt.Errorf("fingerprint artifact location: %w", err)
 	}
 	identity := struct {
-		SchemaVersion string
-		Namespace     string
-		Name          string
-		UID           types.UID
-		Spec          kamav1alpha1.ModelDeploymentSpec
-		ArtifactUID   types.UID
-		Digest        string
-		Entrypoint    string
-		Files         []kamav1alpha1.ModelArtifactFileStatus
-		Location      *kamav1alpha1.ModelArtifactLocationStatus
-		Image         string
-		PullPolicy    corev1.PullPolicy
-		PullSecrets   []corev1.LocalObjectReference
-		LlamaCommit   string
+		SchemaVersion    string
+		Namespace        string
+		Name             string
+		UID              types.UID
+		Spec             kamav1alpha1.ModelDeploymentSpec
+		ArtifactUID      types.UID
+		Digest           string
+		Entrypoint       string
+		Files            []kamav1alpha1.ModelArtifactFileStatus
+		Location         *kamav1alpha1.ModelArtifactLocationStatus
+		Image            string
+		PullPolicy       corev1.PullPolicy
+		PullSecrets      []corev1.LocalObjectReference
+		RuntimeClassName string
+		LlamaCommit      string
 	}{
 		SchemaVersion: kamaruntime.SchemaVersion,
 		Namespace:     deployment.Namespace, Name: deployment.Name, UID: deployment.UID,
 		Spec: deployment.Spec, ArtifactUID: artifact.UID, Digest: artifact.Status.ArtifactDigest,
 		Entrypoint: artifact.Spec.Entrypoint, Files: artifact.Status.Files,
 		Location: artifact.Status.Location, Image: image, PullPolicy: r.Runtime.PullPolicy,
-		PullSecrets: r.Runtime.ImagePullSecrets, LlamaCommit: r.Runtime.LlamaCommit,
+		PullSecrets: r.Runtime.ImagePullSecrets, RuntimeClassName: runtimeClassName,
+		LlamaCommit: r.Runtime.LlamaCommit,
 	}
 	fingerprint, err := operationID(identity)
 	if err != nil {
@@ -940,6 +959,10 @@ func (r *ModelDeploymentReconciler) newServingDeployment(
 	}
 	if deployment.Spec.Placement.Mode == kamav1alpha1.ModelDeploymentPlacementAccelerator {
 		podSpec.NodeSelector = map[string]string{corev1.LabelArchStable: "amd64"}
+		if r.Runtime.CUDARuntimeClassName != "" {
+			runtimeClassName := r.Runtime.CUDARuntimeClassName
+			podSpec.RuntimeClassName = &runtimeClassName
+		}
 	}
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{

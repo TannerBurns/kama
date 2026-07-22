@@ -35,6 +35,9 @@ runtime:
       # When set, digest takes precedence over tag.
       digest: ""
   cuda:
+    # Optional RuntimeClass assigned only to accelerator serving Pods. Leave
+    # empty when the cluster's default runtime provides NVIDIA device support.
+    runtimeClassName: ""
     image:
       repository: ghcr.io/tannerburns/kama-runtime-cuda
       # Defaults to the chart appVersion when empty.

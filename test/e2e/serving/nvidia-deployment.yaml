@@ -2,6 +2,8 @@ apiVersion: kama.tannerburns.github.io/v1alpha1
 kind: ModelDeployment
 metadata:
   name: e2e-serving-nvidia
+  labels:
+    kama.tannerburns.github.io/e2e-run: E2E_NVIDIA_RUN_ID
 spec:
   modelRef:
     name: e2e-serving-nvidia-model
