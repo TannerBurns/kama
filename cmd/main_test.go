@@ -58,7 +58,7 @@ func TestBuildRuntimeOptions(t *testing.T) {
 	options, err := buildRuntimeOptions(
 		"registry.example/kama-runtime-cpu:v1", "registry.example/kama-runtime-cuda:v1",
 		"nvidia.example", string(corev1.PullNever), " first,second ",
-		"af6528e6df5d798f7f1363ec1141699be0f638e2",
+		"b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45",
 	)
 	if err != nil {
 		t.Fatalf("buildRuntimeOptions(): %v", err)

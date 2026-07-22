@@ -60,8 +60,8 @@ dead supervisor.
 ### Runtime boundary
 
 - Kama builds `kama-runtime-cpu` for Linux amd64/arm64 and `kama-runtime-cuda` for
-  Linux amd64 from llama.cpp release `b9445`, commit
-  `af6528e6df5d798f7f1363ec1141699be0f638e2`. Both images share a Go supervisor and
+  Linux amd64 from llama.cpp release `b10091`, commit
+  `b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45`. Both images share a Go supervisor and
   the Kama release version.
 - The supervisor is PID 1 and starts `llama-server` once. It owns the model path,
   bind address, ports, diagnostics, device selection, split mode, offline mode, and

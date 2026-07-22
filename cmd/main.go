@@ -110,7 +110,7 @@ func main() {
 		"Image pull policy used by ModelDeployment Pods.")
 	flag.StringVar(&runtimePullSecrets, "runtime-image-pull-secrets", "",
 		"Comma-separated image pull Secret names copied to ModelDeployment Pods.")
-	flag.StringVar(&llamaCommit, "llama-commit", "af6528e6df5d798f7f1363ec1141699be0f638e2",
+	flag.StringVar(&llamaCommit, "llama-commit", "b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45",
 		"Full pinned llama.cpp source commit contained in the runtime images.")
 	flag.BoolVar(&showVersion, "version", false, "Print the Kama version and exit.")
 	opts := zap.Options{

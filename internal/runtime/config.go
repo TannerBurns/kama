@@ -320,6 +320,13 @@ func (config Config) Arguments() []string {
 	case FlashAttentionDisabled:
 		flashAttention = llamaOptionOff
 	}
+	logVerbosity := "3"
+	if config.Mode == ModeAccelerator {
+		// llama.cpp emits the trace-level device inventory used to prove that the
+		// child sees exactly one CUDA device. Keep CPU serving at the quieter
+		// default information level.
+		logVerbosity = "4"
+	}
 
 	arguments := []string{
 		"--model", config.ModelPath(),
@@ -349,7 +356,7 @@ func (config Config) Arguments() []string {
 		"--no-ui",
 		"--no-mmproj",
 		"--offline",
-		"--log-verbosity", "3",
+		"--log-verbosity", logVerbosity,
 		"--log-colors", llamaOptionOff,
 		"--no-log-prefix",
 		"--no-log-timestamps",

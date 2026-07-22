@@ -325,7 +325,8 @@ func TestAcceleratorReadinessRequiresObservedCUDAOffload(t *testing.T) {
 	if supervisor.Snapshot().Ready {
 		t.Fatal("accelerator runtime became ready without observed CUDA offload")
 	}
-	supervisor.observeStartupLog("ggml_cuda_init: found 1 CUDA devices (Total VRAM: 40536 MiB):")
+	supervisor.observeStartupLog("device_info:")
+	supervisor.observeStartupLog("cmn  common_param:   - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)")
 	supervisor.observeStartupLog("load_tensors: offloaded 12/24 layers to GPU")
 	time.Sleep(3 * testProbeInterval)
 	if state := supervisor.Snapshot(); state.Ready || state.Phase == PhaseReady {
@@ -361,7 +362,11 @@ func TestAcceleratorReadinessRequiresExactlyOneVisibleDevice(t *testing.T) {
 		t.Fatalf("multiple-device accelerator state = %#v", state)
 	}
 	supervisor.observeStartupLog("ggml_cuda_init: found 1 CUDA devices (Total VRAM: 40536 MiB):")
-	waitForPhase(t, supervisor, PhaseReady)
+	time.Sleep(3 * testProbeInterval)
+	if state := supervisor.Snapshot(); state.Ready || state.Runtime.VisibleAccelerators == nil ||
+		*state.Runtime.VisibleAccelerators != 2 {
+		t.Fatalf("later smaller inventory weakened multiple-device state = %#v", state)
+	}
 
 	ctx, stop := context.WithTimeout(context.Background(), 3*time.Second)
 	defer stop()
@@ -381,25 +386,82 @@ func TestAcceleratorStartupFactsAndLogRedaction(t *testing.T) {
 	var logs bytes.Buffer
 	supervisor := NewSupervisor(config, Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
 	childOutput := "PRIVATE-BODY-" + strings.Repeat("x", maximumLogFragmentBytes*2) + "\n" +
-		"ggml_cuda_init: found 1 CUDA devices (Total VRAM: 40536 MiB):\n" +
-		"  Device 0: NVIDIA A100-SXM4-40GB, compute capability 8.0, VMM: yes, VRAM: 40536 MiB\n" +
+		"device_info:\n" +
+		"cmn  common_param:   - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)\n" +
+		"  - CPU     : Intel(R) Xeon(R) CPU (193053 MiB, 191000 MiB free)\n" +
+		"  Device 0: NVIDIA GeForce RTX 4090, compute capability 8.9, VMM: yes, VRAM: 24564 MiB\n" +
+		"  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)\n" +
 		"load_tensors: offloaded 24/24 layers to GPU\n"
 	supervisor.consumeChildLog("stderr", strings.NewReader(childOutput))
 	state := supervisor.Snapshot()
 	if !state.Runtime.AcceleratorDetected || state.Runtime.VisibleAccelerators == nil ||
 		*state.Runtime.VisibleAccelerators != 1 || state.Runtime.OffloadedLayers == nil ||
 		*state.Runtime.OffloadedLayers != 24 || state.Runtime.TotalLayers == nil ||
-		*state.Runtime.TotalLayers != 24 || state.Runtime.AcceleratorDevice != "NVIDIA A100-SXM4-40GB" {
+		*state.Runtime.TotalLayers != 24 || state.Runtime.AcceleratorDevice != "NVIDIA GeForce RTX 4090" {
 		t.Fatalf("accelerator state = %#v", state.Runtime)
 	}
-	if strings.Contains(logs.String(), "PRIVATE-BODY") || strings.Contains(logs.String(), "NVIDIA A100") {
+	if strings.Contains(logs.String(), "PRIVATE-BODY") || strings.Contains(logs.String(), "NVIDIA GeForce") ||
+		strings.Contains(logs.String(), "24082 MiB") {
 		t.Fatalf("forwarded log exposed child content: %s", logs.String())
+	}
+	if got := sanitizeLogLine("  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)"); got != acceleratorInventoryLogEvent {
+		t.Fatalf("CUDA inventory log = %q", got)
+	}
+	if got := sanitizeLogLine("cmn  common_param:   - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)"); got != acceleratorInventoryLogEvent {
+		t.Fatalf("prefixed CUDA inventory log = %q", got)
+	}
+	if got := sanitizeLogLine("  - CPU     : Intel(R) Xeon(R) CPU (193053 MiB, 191000 MiB free)"); got != suppressedLogEvent {
+		t.Fatalf("CPU inventory log = %q", got)
 	}
 	if got := sanitizeLogLine(`request: {"prompt":"private text"}`); got != "sensitive-output-redacted" {
 		t.Fatalf("sensitive log = %q", got)
 	}
-	if got := sanitizeLogLine("user supplied CUDA0: private text"); got != "output-suppressed" {
+	if got := sanitizeLogLine("user supplied CUDA0: private text"); got != suppressedLogEvent {
 		t.Fatalf("unclassified log = %q", got)
+	}
+}
+
+func TestAcceleratorInventoryRejectsMultipleAndMalformedDevices(t *testing.T) {
+	config := validConfig()
+	config.Mode = ModeAccelerator
+	config.Default()
+	supervisor := NewSupervisor(config, Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+
+	supervisor.observeStartupLog("user supplied CUDA0: private text")
+	supervisor.observeStartupLog("user common_param: - CUDA0 : private text (24082 MiB, 23687 MiB free)")
+	supervisor.observeStartupLog("  - CPU     : Intel(R) Xeon(R) CPU (193053 MiB, 191000 MiB free)")
+	if state := supervisor.Snapshot(); state.Runtime.VisibleAccelerators != nil || state.Runtime.AcceleratorDetected {
+		t.Fatalf("malformed inventory changed state = %#v", state.Runtime)
+	}
+
+	supervisor.observeStartupLog("  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)")
+	supervisor.observeStartupLog("  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)")
+	supervisor.observeStartupLog("  Device 0: NVIDIA GeForce RTX 4090, compute capability 8.9, VMM: yes, VRAM: 24564 MiB")
+	state := supervisor.Snapshot()
+	if state.Runtime.VisibleAccelerators == nil || *state.Runtime.VisibleAccelerators != 1 ||
+		state.Runtime.AcceleratorDevice != "NVIDIA GeForce RTX 4090" {
+		t.Fatalf("duplicate inventory state = %#v", state.Runtime)
+	}
+
+	supervisor.observeStartupLog("  - CUDA1   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)")
+	state = supervisor.Snapshot()
+	if state.Runtime.VisibleAccelerators == nil || *state.Runtime.VisibleAccelerators != 2 ||
+		state.Runtime.AcceleratorDevice != "" {
+		t.Fatalf("multiple-device inventory state = %#v", state.Runtime)
+	}
+}
+
+func TestCPUStartupIgnoresAcceleratorFacts(t *testing.T) {
+	config := validConfig()
+	config.Default()
+	supervisor := NewSupervisor(config, Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	supervisor.observeStartupLog("  - CUDA0   : NVIDIA GeForce RTX 4090 (24082 MiB, 23687 MiB free)")
+	supervisor.observeStartupLog("load_tensors: offloaded 33/33 layers to GPU")
+	state := supervisor.Snapshot()
+	if state.Runtime.AcceleratorDetected || state.Runtime.VisibleAccelerators != nil ||
+		state.Runtime.OffloadedLayers != nil || state.Runtime.TotalLayers != nil ||
+		state.Runtime.AcceleratorDevice != "" {
+		t.Fatalf("CPU startup accepted accelerator facts = %#v", state.Runtime)
 	}
 }
 
@@ -454,8 +516,8 @@ func TestDrainEndpointRejectsNonLoopbackCaller(t *testing.T) {
 
 const (
 	testProbeInterval    = 10 * time.Millisecond
-	testLlamaCommit      = "af6528e6df5d798f7f1363ec1141699be0f638e2"
-	testLlamaBuildNumber = "9445"
+	testLlamaCommit      = "b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45"
+	testLlamaBuildNumber = "10091"
 )
 
 type runtimeFixture struct {

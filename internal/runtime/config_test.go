@@ -111,7 +111,7 @@ func TestArgumentsOwnEveryLlamaServerControl(t *testing.T) {
 		"--threads", "8",
 		"--threads-batch", "6",
 		"--metrics", "--slots", "--no-ui", "--no-mmproj", "--offline",
-		"--log-verbosity", "3", "--log-colors", llamaOptionOff, "--no-log-prefix", "--no-log-timestamps",
+		"--log-verbosity", "4", "--log-colors", llamaOptionOff, "--no-log-prefix", "--no-log-timestamps",
 		"--fit", llamaOptionOff,
 		"--no-kv-unified", "--no-context-shift", "--warmup", "--cont-batching",
 		"--split-mode", "none", "--n-gpu-layers", "all",
@@ -124,6 +124,7 @@ func TestArgumentsOwnEveryLlamaServerControl(t *testing.T) {
 	arguments := config.Arguments()
 	if !containsSequence(arguments, "--ctx-size", "0") ||
 		!containsSequence(arguments, "--parallel", "1") ||
+		!containsSequence(arguments, "--log-verbosity", "3") ||
 		!containsSequence(arguments, "--device", "none") ||
 		!containsSequence(arguments, "--n-gpu-layers", "0") {
 		t.Fatalf("CPU native-context arguments = %#v", arguments)

@@ -31,7 +31,7 @@ Important values:
 | `runtime.cuda.runtimeClassName` | `""` | Optional RuntimeClass assigned only to accelerator serving Pods |
 | `runtime.imagePullPolicy` | `IfNotPresent` | Pull policy copied to generated serving Pods |
 | `runtime.imagePullSecrets` | `[]` | Secret names copied to generated serving Pods |
-| `runtime.llamaCommit` | `af6528e6df5d798f7f1363ec1141699be0f638e2` | Exact llama.cpp build expected by the controller and runtime |
+| `runtime.llamaCommit` | `b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45` | Exact llama.cpp build expected by the controller and runtime |
 | `webhook.enabled` | `true` | Install and start fail-closed v1alpha1 admission |
 | `webhook.tls.secretName` | `<fullname>-webhook-tls` | Helm-owned CA and leaf Secret |
 | `minReadySeconds` | `10` | Keep a replacement manager ready before retiring the previous admission endpoint |
