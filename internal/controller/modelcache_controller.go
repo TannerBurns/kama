@@ -193,6 +193,13 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, request ctrl.Reque
 	if cache.Status.LastProbeTime != nil {
 		age := time.Since(cache.Status.LastProbeTime.Time)
 		if age >= 0 && age < defaultProbeInterval && canPreserveCacheReady(&cache, &claim, identity) {
+			probeResourcesRemain, cleanupErr := r.cleanupCompletedProbeResources(ctx, &cache, &claim)
+			if cleanupErr != nil {
+				return ctrl.Result{}, cleanupErr
+			}
+			if probeResourcesRemain {
+				return ctrl.Result{RequeueAfter: time.Second}, nil
+			}
 			publishReadyModelCacheMetrics(&cache)
 			return ctrl.Result{RequeueAfter: defaultProbeInterval - age}, nil
 		}
@@ -450,14 +457,6 @@ func (r *ModelCacheReconciler) reconcileProbe(
 		return r.updateClaimStatus(ctx, cache, claim, &identity, "UnsupportedFilesystem",
 			"cache filesystem did not pass write, fsync, file/directory atomic rename, mmap, and lock checks", 0)
 	}
-	// Remove transient probe resources before publishing Ready. If cleanup fails,
-	// the completed Job remains recoverable and the next reconciliation retries.
-	if err := deleteIfPresent(ctx, r.Client, configMap); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := deleteIfPresent(ctx, r.Client, job); err != nil {
-		return ctrl.Result{}, err
-	}
 	before := cache.Status.DeepCopy()
 	applyCacheIdentity(cache, claim, identity)
 	freeSpace := *resource.NewQuantity(int64(probe.FreeBytes), resource.BinarySI)
@@ -492,6 +491,16 @@ func (r *ModelCacheReconciler) reconcileProbe(
 			return ctrl.Result{}, err
 		}
 	}
+	// Publish the durable probe result before removing its only replayable
+	// evidence. A cached status write can conflict after the Job completion
+	// event; retaining both resources lets the next reconciliation retry the
+	// same verified result instead of starting an unnecessary new probe.
+	if err := deleteIfPresent(ctx, r.Client, configMap); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := deleteIfPresent(ctx, r.Client, job); err != nil {
+		return ctrl.Result{}, err
+	}
 	if readyTransition {
 		r.recordCacheEvent(cache, corev1.EventTypeNormal, cacheProbeReason,
 			"Cache filesystem probe succeeded")
@@ -519,6 +528,26 @@ func (r *ModelCacheReconciler) ensureProbeResources(
 	cache *kamav1alpha1.ModelCache,
 	claim *corev1.PersistentVolumeClaim,
 ) (*batchv1.Job, *corev1.ConfigMap, error) {
+	job, configMap, err := r.desiredProbeResources(cache, claim)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := ensureObject(ctx, r.Client, configMap); err != nil {
+		return nil, nil, fmt.Errorf("create cache probe config: %w", err)
+	}
+	if err := ensureObject(ctx, r.Client, job); err != nil {
+		return nil, nil, fmt.Errorf("create cache probe Job: %w", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
+		return nil, nil, err
+	}
+	return job, configMap, nil
+}
+
+func (r *ModelCacheReconciler) desiredProbeResources(
+	cache *kamav1alpha1.ModelCache,
+	claim *corev1.PersistentVolumeClaim,
+) (*batchv1.Job, *corev1.ConfigMap, error) {
 	operation := deterministicName("probe", string(cache.UID), string(claim.UID))
 	configName := deterministicName(cache.Name+"-probe-config", operation)
 	jobName := deterministicName(cache.Name+"-probe", operation)
@@ -532,9 +561,6 @@ func (r *ModelCacheReconciler) ensureProbeResources(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := ensureObject(ctx, r.Client, configMap); err != nil {
-		return nil, nil, fmt.Errorf("create cache probe config: %w", err)
-	}
 	job, err := newImportJob(r.Scheme, r.Importer, importJobOptions{
 		Owner: cache, Name: jobName, ConfigMapName: configName, CacheClaim: claim.Name,
 		OperationID: operation, ActiveTimeout: r.ProbeTimeout,
@@ -542,13 +568,56 @@ func (r *ModelCacheReconciler) ensureProbeResources(
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := ensureObject(ctx, r.Client, job); err != nil {
-		return nil, nil, fmt.Errorf("create cache probe Job: %w", err)
-	}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(job), job); err != nil {
-		return nil, nil, err
-	}
 	return job, configMap, nil
+}
+
+func (r *ModelCacheReconciler) cleanupCompletedProbeResources(
+	ctx context.Context,
+	cache *kamav1alpha1.ModelCache,
+	claim *corev1.PersistentVolumeClaim,
+) (bool, error) {
+	desiredJob, desiredConfigMap, err := r.desiredProbeResources(cache, claim)
+	if err != nil {
+		return false, err
+	}
+	reader := r.referenceReader()
+	var job batchv1.Job
+	jobFound := true
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(desiredJob), &job); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("read retained cache probe Job: %w", err)
+		}
+		jobFound = false
+	} else {
+		if err := validateExistingJob(desiredJob, &job); err != nil {
+			return false, err
+		}
+		if !jobComplete(&job) && !jobFailed(&job) {
+			return true, nil
+		}
+	}
+
+	var configMap corev1.ConfigMap
+	configMapFound := true
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(desiredConfigMap), &configMap); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("read retained cache probe ConfigMap: %w", err)
+		}
+		configMapFound = false
+	} else if err := validateExistingConfigMap(desiredConfigMap, &configMap); err != nil {
+		return false, err
+	}
+	if configMapFound {
+		if err := deleteIfPresent(ctx, r.Client, &configMap); err != nil {
+			return true, err
+		}
+	}
+	if jobFound {
+		if err := deleteIfPresent(ctx, r.Client, &job); err != nil {
+			return true, err
+		}
+	}
+	return jobFound || configMapFound, nil
 }
 
 func canPreserveCacheReady(
