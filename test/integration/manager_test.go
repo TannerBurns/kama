@@ -617,6 +617,18 @@ func (s *integrationSuite) testManagedCacheAndHubImport(t *testing.T) {
 		t.Fatalf("unexpected probe spec: %#v", probeSpec)
 	}
 	assertImporterJobSecurity(t, probeJob, true, false, false)
+	eventually(t, "managed cache to observe running probe", func() (bool, error) {
+		if err := s.managerClient.Get(context.Background(), client.ObjectKeyFromObject(cache), cache); err != nil {
+			return false, err
+		}
+		condition := meta.FindStatusCondition(
+			cache.Status.Conditions, kamav1alpha1.ModelCacheConditionReady,
+		)
+		if condition != nil && condition.Status == metav1.ConditionFalse && condition.Reason == "ProbeRunning" {
+			return true, nil
+		}
+		return false, fmt.Errorf("current ModelCache status is %+v", cache.Status)
+	})
 	s.completeJob(t, probeJob, artifact.Result{
 		SchemaVersion: artifact.SchemaVersion,
 		Mode:          artifact.ModeProbe,
@@ -637,7 +649,10 @@ func (s *integrationSuite) testManagedCacheAndHubImport(t *testing.T) {
 		if err := s.apiClient.Get(context.Background(), client.ObjectKeyFromObject(cache), cache); err != nil {
 			return false, err
 		}
-		return meta.IsStatusConditionTrue(cache.Status.Conditions, kamav1alpha1.ModelCacheConditionReady), nil
+		if meta.IsStatusConditionTrue(cache.Status.Conditions, kamav1alpha1.ModelCacheConditionReady) {
+			return true, nil
+		}
+		return false, fmt.Errorf("current ModelCache status is %+v", cache.Status)
 	})
 	if cache.Status.ClaimName != claim.Name || cache.Status.VolumeName != pv.Name || cache.Status.VolumeUID != pv.UID {
 		t.Fatalf("cache volume identity = %#v, want claim %s and PV %s/%s", cache.Status, claim.Name, pv.Name, pv.UID)

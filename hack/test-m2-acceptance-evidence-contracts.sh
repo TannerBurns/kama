@@ -5,6 +5,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 service_contract="$(<"${repo_root}/hack/m2-nvidia-service-contract.jq")"
 storage_contract="$(<"${repo_root}/hack/m2-nvidia-storage-contract.jq")"
+pod_contract="$(<"${repo_root}/hack/m2-nvidia-pod-contract.jq")"
 runtime_class_contract='
   if $runtimeClass == "" then
     .runtimeClassName == null
@@ -18,6 +19,7 @@ service_uid="11111111-2222-3333-4444-555555555555"
 requested_parent_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 resolved_amd64_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 unrelated_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+runtime_image="ghcr.io/tannerburns/kama-runtime-cuda@${resolved_amd64_digest}"
 
 assert_image_id_result() {
   local observed=$1
@@ -79,6 +81,60 @@ if jq -e --arg runtimeClass vendor-gpu.example "${runtime_class_contract}" \
   jq -e --arg runtimeClass '' "${runtime_class_contract}" \
     "${fixture_dir}/nvidia-pod-spec-runtime-class.json" >/dev/null; then
   echo "expected NVIDIA RuntimeClass evidence fixtures to fail" >&2
+  exit 1
+fi
+
+assert_pod_passes() {
+  local fixture=$1
+  if ! jq -e --arg image "${runtime_image}" --arg runtimeClass vendor-gpu.example \
+    "${pod_contract}" "${fixture_dir}/${fixture}" >/dev/null; then
+    echo "expected NVIDIA Pod evidence fixture to pass: ${fixture}" >&2
+    exit 1
+  fi
+}
+
+assert_pod_fails() {
+  local fixture=$1
+  if jq -e --arg image "${runtime_image}" --arg runtimeClass vendor-gpu.example \
+    "${pod_contract}" "${fixture_dir}/${fixture}" >/dev/null; then
+    echo "expected NVIDIA Pod evidence fixture to fail: ${fixture}" >&2
+    exit 1
+  fi
+}
+
+assert_pod_passes nvidia-pods-single-ready.json
+assert_pod_fails nvidia-pods-restarted.json
+duplicate_pods_fixture="$(jq -c '.items += [.items[0]]' \
+  "${fixture_dir}/nvidia-pods-single-ready.json")"
+if jq -e --arg image "${runtime_image}" --arg runtimeClass vendor-gpu.example \
+  "${pod_contract}" <<<"${duplicate_pods_fixture}" >/dev/null; then
+  echo "expected duplicate NVIDIA Pod evidence to fail" >&2
+  exit 1
+fi
+if jq -e --arg image "ghcr.io/tannerburns/kama-runtime-cuda@${unrelated_digest}" \
+  --arg runtimeClass vendor-gpu.example "${pod_contract}" \
+  "${fixture_dir}/nvidia-pods-single-ready.json" >/dev/null; then
+  echo "expected unrelated NVIDIA Pod image identity to fail" >&2
+  exit 1
+fi
+if jq -e --arg image "${runtime_image}" --arg runtimeClass different-runtime \
+  "${pod_contract}" "${fixture_dir}/nvidia-pods-single-ready.json" >/dev/null; then
+  echo "expected incorrect NVIDIA Pod RuntimeClass to fail" >&2
+  exit 1
+fi
+not_ready_pod_fixture="$(jq -c '
+  .items[0].status.conditions[0].status = "False"
+' "${fixture_dir}/nvidia-pods-single-ready.json")"
+if jq -e --arg image "${runtime_image}" --arg runtimeClass vendor-gpu.example \
+  "${pod_contract}" <<<"${not_ready_pod_fixture}" >/dev/null; then
+  echo "expected unready NVIDIA Pod evidence to fail" >&2
+  exit 1
+fi
+default_runtime_pod_fixture="$(jq -c 'del(.items[0].spec.runtimeClassName)' \
+  "${fixture_dir}/nvidia-pods-single-ready.json")"
+if ! jq -e --arg image "${runtime_image}" --arg runtimeClass "" \
+  "${pod_contract}" <<<"${default_runtime_pod_fixture}" >/dev/null; then
+  echo "expected NVIDIA Pod evidence without an explicit RuntimeClass to pass" >&2
   exit 1
 fi
 
@@ -230,4 +286,4 @@ assert_storage_contract "${managed_storage_fixture}" claimTemplate pass
 assert_storage_contract "$(jq -c '.modelCache.spec.storage.existingClaim = {name: "foreign"}' \
   <<<"${managed_storage_fixture}")" claimTemplate fail
 
-echo "M2 NVIDIA Service, RuntimeClass, and storage evidence contract fixtures passed"
+echo "M2 NVIDIA Service, RuntimeClass, Pod, and storage evidence contract fixtures passed"

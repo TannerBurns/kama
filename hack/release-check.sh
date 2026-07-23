@@ -150,6 +150,7 @@ evidence_contract_tests="${repo_root}/hack/test-m2-acceptance-evidence-contracts
 preinstalled_contract_tests="${repo_root}/hack/test-e2e-serving-nvidia-preinstalled.sh"
 published_image_contract_tests="${repo_root}/hack/test-verify-published-release-image.sh"
 image_identity_contract="${repo_root}/hack/m2-nvidia-image-identity.jq"
+pod_contract="${repo_root}/hack/m2-nvidia-pod-contract.jq"
 if ! grep -Fqx 'HELM ?= $(LOCALBIN)/helm' "${makefile}" ||
   ! grep -Fqx 'COSIGN ?= $(LOCALBIN)/cosign' "${makefile}"; then
   echo "Makefile must preserve operator-supplied HELM and COSIGN paths" >&2
@@ -196,6 +197,13 @@ if ! grep -Fq 'nvidia_storage_contract="$(<"${repo_root}/hack/m2-nvidia-storage-
   ! grep -Fq 'assert_json storage.json "bound cache/artifact/PVC/PV identity and retention contract"' \
     "${evidence_verifier}"; then
   echo "M2 NVIDIA evidence verifier is not using the regression-tested storage contract" >&2
+  exit 1
+fi
+if [[ ! -s "${pod_contract}" ]] ||
+  ! grep -Fq 'nvidia_pod_contract="$(<"${repo_root}/hack/m2-nvidia-pod-contract.jq")"' \
+    "${evidence_verifier}" ||
+  ! grep -Fq '"${nvidia_pod_contract}"' "${evidence_verifier}"; then
+  echo "M2 NVIDIA evidence verifier is not using the regression-tested Pod contract" >&2
   exit 1
 fi
 bash "${evidence_contract_tests}" >/dev/null

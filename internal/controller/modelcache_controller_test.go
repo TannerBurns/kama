@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -28,15 +29,19 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 const (
@@ -622,6 +627,188 @@ func TestRefreshTransientResultReadPreservesReady(t *testing.T) {
 	if !meta.IsStatusConditionTrue(updated.Status.Conditions, kamav1alpha1.ModelCacheConditionReady) {
 		t.Fatalf("Ready was not preserved while the terminal Job result was transiently unavailable: %+v",
 			updated.Status.Conditions)
+	}
+}
+
+func TestSuccessfulProbeRetainsEvidenceUntilReadyStatusPersists(t *testing.T) {
+	scheme := modelCacheTestScheme(t)
+	cache := testExistingClaimCache("probe-status-conflict", modelCacheTestClaimName)
+	claim := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: modelCacheTestClaimName, Namespace: cache.Namespace, UID: types.UID(modelCacheTestClaimUID),
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			VolumeMode:  ptr(corev1.PersistentVolumeFilesystem),
+		},
+		Status: corev1.PersistentVolumeClaimStatus{
+			Phase: corev1.ClaimBound, AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("2Gi")},
+		},
+	}
+	failCleanup := true
+	kubeClient := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&kamav1alpha1.ModelCache{}).
+		WithObjects(cache, claim).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(
+				ctx context.Context,
+				underlying client.WithWatch,
+				object client.Object,
+				options ...client.DeleteOption,
+			) error {
+				if _, ok := object.(*corev1.ConfigMap); ok && failCleanup {
+					failCleanup = false
+					return errors.New("injected probe cleanup failure")
+				}
+				return underlying.Delete(ctx, object, options...)
+			},
+		}).
+		Build()
+	clientset := kubernetesfake.NewSimpleClientset()
+	reconciler := &ModelCacheReconciler{reconcilerBase: reconcilerBase{
+		Client: kubeClient, Scheme: scheme, Recorder: events.NewFakeRecorder(4),
+		Clientset: clientset, Importer: ImporterOptions{Image: modelCacheTestImporterImage},
+	}}
+	job, configMap, err := reconciler.ensureProbeResources(context.Background(), cache, claim)
+	if err != nil {
+		t.Fatalf("ensureProbeResources(): %v", err)
+	}
+	job.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{
+		batchv1.ControllerUidLabel: string(job.UID),
+	}}
+	job.Spec.Template.Labels[batchv1.ControllerUidLabel] = string(job.UID)
+	if err := kubeClient.Update(context.Background(), job); err != nil {
+		t.Fatalf("apply API-server Job selector defaults: %v", err)
+	}
+	operation := job.Labels[operationIDLabel]
+	resultLine, err := artifact.MarshalResultLine(artifact.Result{
+		SchemaVersion: artifact.SchemaVersion,
+		OperationID:   operation,
+		Mode:          artifact.ModeProbe,
+		Success:       true,
+		Probe: &artifact.ProbeResult{
+			CapacityBytes: 2 << 30, FreeBytes: 1 << 30,
+			Write: true, Fsync: true, AtomicRename: true, DirectoryRename: true, Mmap: true, Lock: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal probe result: %v", err)
+	}
+	clientset.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "log" {
+			return false, nil, nil
+		}
+		return true, &runtime.Unknown{Raw: resultLine}, nil
+	})
+	controller := true
+	if err := kubeClient.Create(context.Background(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "probe-result", Namespace: cache.Namespace,
+			Labels: map[string]string{legacyJobNameLabel: job.Name, operationIDLabel: operation},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: batchv1.SchemeGroupVersion.String(), Kind: "Job", Name: job.Name, UID: job.UID,
+				Controller: &controller,
+			}},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers:    []corev1.Container{{Name: importerContainer, Image: modelCacheTestImporterImage}},
+		},
+	}); err != nil {
+		t.Fatalf("create probe result Pod: %v", err)
+	}
+	job.Status.Conditions = []batchv1.JobCondition{{
+		Type: batchv1.JobComplete, Status: corev1.ConditionTrue,
+	}}
+	if err := kubeClient.Status().Update(context.Background(), job); err != nil {
+		t.Fatalf("complete probe Job: %v", err)
+	}
+	var completedJob batchv1.Job
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(job), &completedJob); err != nil {
+		t.Fatalf("get completed probe Job: %v", err)
+	}
+	if !jobComplete(&completedJob) {
+		t.Fatalf("probe Job did not retain terminal status: %+v", completedJob.Status)
+	}
+
+	capacity := resource.MustParse("2Gi")
+	identity := volumeIdentity{
+		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+		VolumeMode:  corev1.PersistentVolumeFilesystem, MountScope: kamav1alpha1.MountScopeSingleNode,
+		Capacity: &capacity,
+	}
+	var stale kamav1alpha1.ModelCache
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(cache), &stale); err != nil {
+		t.Fatalf("get ModelCache: %v", err)
+	}
+	var competing kamav1alpha1.ModelCache
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(cache), &competing); err != nil {
+		t.Fatalf("get competing ModelCache: %v", err)
+	}
+	competing.Status.ObservedGeneration = competing.Generation
+	meta.SetStatusCondition(&competing.Status.Conditions, metav1.Condition{
+		Type: kamav1alpha1.ModelCacheConditionReady, Status: metav1.ConditionFalse,
+		ObservedGeneration: competing.Generation, Reason: probeRunningReason,
+		Message: "competing reconciliation is observing the running probe",
+	})
+	if err := kubeClient.Status().Update(context.Background(), &competing); err != nil {
+		t.Fatalf("persist competing ModelCache status: %v", err)
+	}
+	if _, err := reconciler.reconcileProbe(context.Background(), &stale, claim, identity); !apierrors.IsConflict(err) {
+		t.Fatalf("reconcileProbe() error = %v, want stale resource-version conflict", err)
+	}
+	var current kamav1alpha1.ModelCache
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(cache), &current); err != nil {
+		t.Fatalf("get ModelCache after conflict: %v", err)
+	}
+	if meta.IsStatusConditionTrue(current.Status.Conditions, kamav1alpha1.ModelCacheConditionReady) {
+		t.Fatalf("conflicting status write unexpectedly persisted Ready: %+v", current.Status)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(job), &batchv1.Job{}); err != nil {
+		t.Fatalf("probe Job was removed before Ready status persisted: %v", err)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(configMap), &corev1.ConfigMap{}); err != nil {
+		t.Fatalf("probe ConfigMap was removed before Ready status persisted: %v", err)
+	}
+
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(cache), &current); err != nil {
+		t.Fatalf("refresh ModelCache: %v", err)
+	}
+	if _, err := reconciler.reconcileProbe(context.Background(), &current, claim, identity); err == nil ||
+		!strings.Contains(err.Error(), "injected probe cleanup failure") {
+		t.Fatalf("retry reconcileProbe() error = %v, want injected cleanup failure", err)
+	}
+	current = kamav1alpha1.ModelCache{}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(cache), &current); err != nil {
+		t.Fatalf("get ready ModelCache: %v", err)
+	}
+	if !meta.IsStatusConditionTrue(current.Status.Conditions, kamav1alpha1.ModelCacheConditionReady) {
+		t.Fatalf("ModelCache Ready did not persist before cleanup retry: %+v", current.Status)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(job), &batchv1.Job{}); err != nil {
+		t.Fatalf("probe Job was removed after its paired cleanup failed: %v", err)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(configMap), &corev1.ConfigMap{}); err != nil {
+		t.Fatalf("probe ConfigMap missing after injected cleanup failure: %v", err)
+	}
+
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKeyFromObject(cache),
+	})
+	if err != nil {
+		t.Fatalf("full cleanup retry Reconcile(): %v", err)
+	}
+	if result.RequeueAfter != time.Second {
+		t.Fatalf("cleanup retry RequeueAfter = %v, want 1s", result.RequeueAfter)
+	}
+	if err := kubeClient.Get(context.Background(), client.ObjectKeyFromObject(job), &batchv1.Job{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("probe Job get after successful status = %v, want NotFound", err)
+	}
+	if err := kubeClient.Get(
+		context.Background(), client.ObjectKeyFromObject(configMap), &corev1.ConfigMap{},
+	); !apierrors.IsNotFound(err) {
+		t.Fatalf("probe ConfigMap get after successful status = %v, want NotFound", err)
 	}
 }
 

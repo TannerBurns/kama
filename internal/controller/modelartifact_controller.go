@@ -418,7 +418,7 @@ func (r *ModelArtifactReconciler) inspectPendingJob(
 ) (condition, reason, message string, blocked bool, returnedErr error) {
 	reader := r.artifactLifecycleReader()
 	var pods corev1.PodList
-	if err := reader.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{"job-name": job.Name}); err != nil {
+	if err := reader.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{legacyJobNameLabel: job.Name}); err != nil {
 		return "", "", "", false, err
 	}
 	for index := range pods.Items {

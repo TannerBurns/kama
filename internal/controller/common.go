@@ -70,6 +70,7 @@ const (
 	artifactUIDLabel        = "kama.tannerburns.github.io/model-artifact-uid"
 	operationIDLabel        = "kama.tannerburns.github.io/operation"
 	leaseFingerprintLabel   = "kama.tannerburns.github.io/lease-fingerprint"
+	legacyJobNameLabel      = "job-name"
 	importerContainer       = "importer"
 	importSpecKey           = "spec.json"
 	importSpecMount         = "/etc/kama/import"
@@ -752,7 +753,7 @@ func (b reconcilerBase) readJobResultWithReader(
 	job *batchv1.Job,
 ) (artifact.Result, error) {
 	var pods corev1.PodList
-	if err := reader.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{"job-name": job.Name}); err != nil {
+	if err := reader.List(ctx, &pods, client.InNamespace(job.Namespace), client.MatchingLabels{legacyJobNameLabel: job.Name}); err != nil {
 		return artifact.Result{}, fmt.Errorf("list importer Pods: %w", err)
 	}
 	slices.SortFunc(pods.Items, func(left, right corev1.Pod) int {
