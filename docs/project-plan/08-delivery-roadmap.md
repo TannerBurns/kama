@@ -86,24 +86,25 @@ Named storage compatibility results: [storage qualification](../storage-qualific
 
 ## M2 - Baseline single-replica serving
 
-**Status: In Progress (updated 2026-07-21).** Qualifying hosted CPU/Kind acceptance
-passed across Kubernetes 1.34–1.36, including real model download, singleton serving,
-generated-content inference, drain, artifact identity transition/recovery, and terminal
-load-failure evidence. Published and signed production runtime-image qualification and
-protected real-NVIDIA validation remain pending in the
+**Status: Complete (2026-07-23).** Qualifying hosted CPU/Kind acceptance passed across
+Kubernetes 1.34–1.36. Signed prerelease
+[`v0.1.0-dev.2`](https://github.com/TannerBurns/kama/tree/v0.1.0-dev.2) at
+[`83c1ecec`](https://github.com/TannerBurns/kama/commit/83c1ecec0b4690fd5eb19ef0244b911f83e8a2bc)
+passed the [release workflow](https://github.com/TannerBurns/kama/actions/runs/29976083510)
+and trusted local real-NVIDIA qualification recorded in the
 [M2 acceptance checklist](../acceptance/m2.md).
 
 ### Deliverables
 
 - [x] `ModelDeployment` CRD and artifact dependency reconciliation.
-- [ ] Pinned CUDA and CPU llama-server runtime images plus supervisor.
+- [x] Pinned CUDA and CPU llama-server runtime images plus supervisor.
 - [x] One fixed single-GPU or CPU Deployment, ClusterIP Service, startup/readiness/drain
   behavior, and controlled runtime arguments.
 - [x] Basic status and native internal diagnostics.
 
 ### Definition of done
 
-- [ ] A verified model starts on one NVIDIA GPU and serves direct internal streaming
+- [x] A verified model starts on one NVIDIA GPU and serves direct internal streaming
   requests.
 - [x] CPU-only works with an explicit `Degraded` status.
 - [x] An artifact that has never loaded, a changed artifact identity/location, or a
