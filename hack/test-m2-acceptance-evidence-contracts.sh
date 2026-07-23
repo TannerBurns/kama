@@ -15,6 +15,33 @@ runtime_class_contract='
 fixture_dir="${repo_root}/test/e2e/serving/evidence"
 service_name="e2e-serving-nvidia-abc123"
 service_uid="11111111-2222-3333-4444-555555555555"
+requested_parent_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+resolved_amd64_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+unrelated_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+assert_image_id_result() {
+  local observed=$1
+  local expected=$2
+  local actual=fail
+  if jq -L "${repo_root}/hack" -ne \
+    --arg observed "${observed}" \
+    --arg parent "${requested_parent_digest}" \
+    --arg amd64 "${resolved_amd64_digest}" '
+      include "m2-nvidia-image-identity";
+      $observed | kama_nvidia_immutable_image_id($parent; $amd64)
+    ' >/dev/null; then
+    actual=pass
+  fi
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "expected NVIDIA observed image ID ${observed} to ${expected}" >&2
+    exit 1
+  fi
+}
+
+assert_image_id_result "ghcr.io/tannerburns/kama-runtime-cuda@${requested_parent_digest}" pass
+assert_image_id_result "ghcr.io/tannerburns/kama-runtime-cuda@${resolved_amd64_digest}" pass
+assert_image_id_result "ghcr.io/tannerburns/kama-runtime-cuda@${unrelated_digest}" fail
+assert_image_id_result "ghcr.io/tannerburns/kama-runtime-cuda:mutable" fail
 
 assert_service_passes() {
   local fixture=$1

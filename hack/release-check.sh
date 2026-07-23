@@ -149,6 +149,12 @@ evidence_verifier="${repo_root}/hack/verify-m2-acceptance-evidence.sh"
 evidence_contract_tests="${repo_root}/hack/test-m2-acceptance-evidence-contracts.sh"
 preinstalled_contract_tests="${repo_root}/hack/test-e2e-serving-nvidia-preinstalled.sh"
 published_image_contract_tests="${repo_root}/hack/test-verify-published-release-image.sh"
+image_identity_contract="${repo_root}/hack/m2-nvidia-image-identity.jq"
+if ! grep -Fqx 'HELM ?= $(LOCALBIN)/helm' "${makefile}" ||
+  ! grep -Fqx 'COSIGN ?= $(LOCALBIN)/cosign' "${makefile}"; then
+  echo "Makefile must preserve operator-supplied HELM and COSIGN paths" >&2
+  exit 1
+fi
 if ! grep -Fq 'https://dl.k8s.io/release/$(KUBECTL_VERSION)/bin/linux/$(KUBECTL_ARCH)/kubectl' \
   "${makefile}" || ! grep -Fq 'sha256sum --check --strict' "${makefile}"; then
   echo "Makefile does not install checksum-verified, version-matched kubectl binaries" >&2
@@ -168,6 +174,14 @@ if [[ ! -f "${preinstalled_contract_tests}" ]]; then
 fi
 if [[ ! -f "${published_image_contract_tests}" ]]; then
   echo "published release image verification regression tests are missing" >&2
+  exit 1
+fi
+if [[ ! -s "${image_identity_contract}" ]] ||
+  ! grep -Fq 'kama_nvidia_immutable_image_id' "${image_identity_contract}" ||
+  ! grep -Fq 'include "m2-nvidia-image-identity"' \
+    "${repo_root}/hack/test-e2e-serving-nvidia.sh" ||
+  ! grep -Fq 'include "m2-nvidia-image-identity"' "${evidence_verifier}"; then
+  echo "NVIDIA runtime and retained-evidence image identity contracts are not shared" >&2
   exit 1
 fi
 if ! grep -Fq 'nvidia_service_contract="$(<"${repo_root}/hack/m2-nvidia-service-contract.jq")"' \
@@ -269,16 +283,25 @@ for contract in \
   'release_attempted=1' \
   '--atomic --wait --timeout 5m' \
   'verify_no_gate_residuals()' \
+  'wait_for_no_gate_residuals()' \
+  'verify_downloaded_sha256()' \
+  'verify_downloaded_sha256 "${image_digest}" "${parent_manifest_file}"' \
+  'verify_downloaded_sha256 "${platform_digest}" "${child_manifest_file}"' \
+  'verify_downloaded_sha256 "${config_digest}" "${config_blob_file}"' \
   'delete_owned_namespace()' \
   "dpkg-query -W" \
   'ldd /usr/local/bin/llama-server' \
-  'libcudart\.so\.12' \
-  'libcublas\.so\.12'; do
+  'libcudart[.]so[.]12' \
+  'libcublas[.]so[.]12'; do
   if ! grep -Fq -- "${contract}" "${nvidia_suite}"; then
     echo "protected NVIDIA suite is missing acceptance contract: ${contract}" >&2
     exit 1
   fi
 done
+if grep -Fq '/usr/local/cuda/version.json' "${nvidia_suite}"; then
+  echo "protected NVIDIA suite must not require optional CUDA version.json metadata" >&2
+  exit 1
+fi
 
 expected_tag="v${version}"
 release_tag="${RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
@@ -360,7 +383,9 @@ release_job_block() {
   ' "${release_workflow}"
 }
 
-cuda_architectures='60;61;70;75;80;86;89;90'
+# CMake's -real/-virtual suffixes keep native SASS for the complete supported
+# set while emitting forward-compatible PTX only for the newest architecture.
+cuda_architectures='60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real;90-virtual'
 ci_cuda_architectures='89'
 if ! grep -Fq "ARG CUDA_ARCHITECTURES=${cuda_architectures}" "${runtime_cuda_dockerfile}" ||
   ! grep -Fq -- '-DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}"' "${runtime_cuda_dockerfile}" ||
@@ -379,7 +404,13 @@ if ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES ?= ${cuda_architectures}" "${repo_root
   ! grep -Fq "RUNTIME_CUDA_ARCHITECTURES: \"${ci_cuda_architectures}\"" \
     "${repo_root}/.github/workflows/ci.yml" ||
   grep -Fq 'CUDA_ARCHITECTURES' <<<"${release_cuda_job}"; then
-  echo "CUDA architecture coverage does not keep full release builds and bounded PR validation" >&2
+  echo "CUDA architecture coverage must keep full release SASS, newest-architecture PTX, and bounded PR validation" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc 'BUILD_JOBS=' <<<"${release_cuda_job}")" -ne 1 ]] ||
+  ! grep -Fq 'BUILD_JOBS=3' <<<"${release_cuda_job}" ||
+  grep -Fq 'BUILD_JOBS=' <<<"$(release_job_block runtime_cpu)"; then
+  echo "release CUDA builds must use three compile workers while CPU builds retain their bounded default" >&2
   exit 1
 fi
 for job in manager importer fixtures runtime_cpu runtime_cuda; do

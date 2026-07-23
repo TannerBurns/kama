@@ -452,6 +452,7 @@ jobs:
             LLAMA_CPP_COMMIT=${{ needs.metadata.outputs.llama_commit }}
             LLAMA_CPP_BUILD_NUMBER=${{ needs.metadata.outputs.llama_build_number }}
             LLAMA_CPP_SOURCE_SHA256=${{ needs.metadata.outputs.llama_source_sha256 }}
+            BUILD_JOBS=3
           provenance: mode=max
 
       - name: Verify published CUDA runtime image

@@ -68,7 +68,7 @@ assert_json() {
   local description=$2
   local filter=$3
   shift 3
-  if ! jq -e "$@" "${filter}" "${evidence_dir}/${file}" >/dev/null; then
+  if ! jq -L "${repo_root}/hack" -e "$@" "${filter}" "${evidence_dir}/${file}" >/dev/null; then
     echo "M2 ${suite} evidence failed: ${description} (${file})" >&2
     exit 1
   fi
@@ -442,13 +442,31 @@ verify_nvidia() {
     .runtimeImageProvenance.revision == $commit and
     .runtimeImageProvenance.llamaCommit == $llamaCommit and
     .runtimeImageProvenance.cudaVersion == $cuda and
-    (.runtimeImageProvenance.expectedObservedManifestDigest | test("^sha256:[a-f0-9]{64}$"))
-  ' --arg commit "${expected_commit}" --arg llamaCommit "${llama_commit}" --arg cuda "${cuda_version}"
+    .runtimeImageProvenance.requestedParentDigest == $requestedDigest and
+    .runtimeImageProvenance.resolvedLinuxAMD64Digest == $resolvedDigest and
+    (.runtimeImageProvenance.allowedObservedManifestDigests | sort) ==
+      ([$requestedDigest, $resolvedDigest] | unique | sort) and
+    .runtimeImageProvenance.expectedObservedManifestDigest == $resolvedDigest
+  ' --arg commit "${expected_commit}" --arg llamaCommit "${llama_commit}" \
+    --arg cuda "${cuda_version}" \
+    --arg requestedDigest "$(jq -r '.images.runtimeCUDA | split("@")[-1]' \
+      "${evidence_dir}/identities.json")" \
+    --arg resolvedDigest "$(jq -r '.images[] | select(.role == "runtimeCUDA").resolvedDigest' \
+      "${evidence_dir}/image-provenance.json")"
   assert_json image-provenance.json "five provenance-bound production images" '
+    def exact_role_image($role; $image):
+      ([.images[] | select(.role == $role and .image == $image)] | length) == 1;
     .sourceCheckoutClean == true and (.images | length) == 5 and
     ([.images[].role] | unique | sort) == ["importer","manager","runtimeCPU","runtimeCUDA","servingClient"] and
-    all(.images[]; .verified == true and .revision == $commit and
-      .source == "https://github.com/TannerBurns/kama") and
+    exact_role_image("manager"; $manager) and
+    exact_role_image("importer"; $importer) and
+    exact_role_image("servingClient"; $fixtures) and
+    exact_role_image("runtimeCPU"; $runtimeCPU) and
+    exact_role_image("runtimeCUDA"; $runtimeCUDA) and
+    all(.images[]; .verified == true and
+      .method == "GHCR distribution API (linux/amd64)" and
+      (.resolvedDigest | test("^sha256:[a-f0-9]{64}$")) and
+      .revision == $commit and .source == "https://github.com/TannerBurns/kama") and
     all(.images[] | select(.role == "runtimeCPU" or .role == "runtimeCUDA");
       .llamaCommit == $llamaCommit and .llamaBuildNumber == $llamaBuild and
       .llamaSourceSHA256 == $llamaSource) and
@@ -457,12 +475,28 @@ verify_nvidia() {
     --arg llamaCommit "${llama_commit}" \
     --arg llamaBuild "${llama_build_number}" \
     --arg llamaSource "${llama_source_sha256}" \
-    --arg cuda "${cuda_version}"
+    --arg cuda "${cuda_version}" \
+    --arg manager "$(jq -r '.images.manager' "${evidence_dir}/identities.json")" \
+    --arg importer "$(jq -r '.images.importer' "${evidence_dir}/identities.json")" \
+    --arg fixtures "$(jq -r '.images.servingClient' "${evidence_dir}/identities.json")" \
+    --arg runtimeCPU "$(jq -r '.images.runtimeCPU' "${evidence_dir}/identities.json")" \
+    --arg runtimeCUDA "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")"
   assert_json supply-chain.json "cosign signatures and SPDX attestations for every image" '
+    def exact_role_image($role; $image):
+      ([.images[] | select(.role == $role and .image == $image)] | length) == 1;
     .verified == true and (.images | length) == 5 and
     ([.images[].role] | unique | length) == 5 and
+    exact_role_image("manager"; $manager) and
+    exact_role_image("importer"; $importer) and
+    exact_role_image("servingClient"; $fixtures) and
+    exact_role_image("runtimeCPU"; $runtimeCPU) and
+    exact_role_image("runtimeCUDA"; $runtimeCUDA) and
     all(.images[]; .signatureVerified == true and .sbomAttestationVerified == true)
-  '
+  ' --arg manager "$(jq -r '.images.manager' "${evidence_dir}/identities.json")" \
+    --arg importer "$(jq -r '.images.importer' "${evidence_dir}/identities.json")" \
+    --arg fixtures "$(jq -r '.images.servingClient' "${evidence_dir}/identities.json")" \
+    --arg runtimeCPU "$(jq -r '.images.runtimeCPU' "${evidence_dir}/identities.json")" \
+    --arg runtimeCUDA "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")"
   assert_json qualification.json "NVIDIA supply chain and supported Kubernetes minor" '
     .supplyChainVerified == true and .kubernetesMinorVerified == true and
     .cleanupComplete == true and .retainedStorageVerified == true
@@ -500,24 +534,39 @@ verify_nvidia() {
     .cudaVersion == $cuda and .restartCount == 0
   ' --arg cuda "${cuda_version}"
   assert_json client-pod.json "immutable restricted serving client Pod" '
+    include "m2-nvidia-image-identity";
     .requestedImage == $image and
-    (.resolvedImage | type == "string" and endswith("@" + $resolvedDigest)) and
+    (.resolvedImage |
+      kama_nvidia_immutable_image_id($requestedDigest; $resolvedDigest)) and
     .ready == false and .succeeded == true and .restartCount == 0 and
     .automountServiceAccountToken == false and .runAsNonRoot == true and
     .runAsUser == 65532 and .runAsGroup == 65532 and .seccompProfile == "RuntimeDefault" and
     .allowPrivilegeEscalation == false and .readOnlyRootFilesystem == true and
     .capabilitiesDropAll == true
   ' --arg image "$(jq -r '.images.servingClient' "${evidence_dir}/identities.json")" \
+    --arg requestedDigest "$(jq -r '.images[] | select(.role == "servingClient").image | split("@")[-1]' \
+      "${evidence_dir}/image-provenance.json")" \
     --arg resolvedDigest "$(jq -r '.images[] | select(.role == "servingClient").resolvedDigest' \
       "${evidence_dir}/image-provenance.json")"
   assert_json cuda-runtime.json "installed and linked CUDA 12.4.1 runtime" '
-    .expectedVersion == $cuda and .declaredVersion == $cuda and .observedVersion == $cuda and
-    .versionMetadata.cuda.version == $cuda and
+    .schemaVersion == 1 and .expectedVersion == $cuda and
+    .declaredVersion == $cuda and .imageLabelVersion == $cuda and
+    .identityVerified == true and
+    .image.signedParentReference == $image and
+    .image.resolvedLinuxAMD64Digest == $resolvedDigest and
+    .image.source == "https://github.com/TannerBurns/kama" and
+    .image.revision == $commit and .image.provenanceVerified == true and
+    .image.signatureAndSBOMVerified == true and
     any(.packages[]; test("^cuda-cudart-12-4(:amd64)?[\\t ]+12\\.4\\.")) and
+    any(.packages[]; test("^libcublas-12-4(:amd64)?[\\t ]+12\\.4\\.")) and
     any(.linkedLibraries[]; test("libcudart\\.so\\.12[[:space:]]+=>[[:space:]]+/")) and
     any(.linkedLibraries[]; test("libcublas\\.so\\.12[[:space:]]+=>[[:space:]]+/"))
-  ' --arg cuda "${cuda_version}"
+  ' --arg cuda "${cuda_version}" --arg commit "${expected_commit}" \
+    --arg image "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")" \
+    --arg resolvedDigest "$(jq -r '.images[] | select(.role == "runtimeCUDA").resolvedDigest' \
+      "${evidence_dir}/image-provenance.json")"
   assert_json modeldeployment.json "current artifact, object, runtime, and fingerprint status" '
+    include "m2-nvidia-image-identity";
     .status.observedGeneration == .metadata.generation and
     .status.desiredReplicas == 1 and .status.readyReplicas == 1 and
     .status.artifact.name == "e2e-serving-nvidia-model" and
@@ -526,7 +575,8 @@ verify_nvidia() {
     (.status.deploymentRef.uid | type == "string" and length > 0) and
     (.status.serviceRef.uid | type == "string" and length > 0) and
     .status.runtime.state == "Ready" and .status.runtime.desiredImage == $image and
-    (.status.runtime.observedImage | test("@sha256:[a-f0-9]{64}$")) and
+    (.status.runtime.observedImage |
+      kama_nvidia_immutable_image_id($requestedDigest; $resolvedDigest)) and
     .status.runtime.desiredFingerprint == .status.runtime.observedFingerprint and
     .status.runtime.desiredFingerprint == .status.runtime.loadedFingerprint and
     .status.runtime.effectiveContextTokens == 2048 and
@@ -536,7 +586,11 @@ verify_nvidia() {
     any(.status.conditions[]; .type == "Serving" and .status == "True") and
     any(.status.conditions[]; .type == "Degraded" and .status == "False")
   ' --arg modelDigest "${model_digest}" \
-    --arg image "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")"
+    --arg image "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")" \
+    --arg requestedDigest "$(jq -r '.images[] | select(.role == "runtimeCUDA").image | split("@")[-1]' \
+      "${evidence_dir}/image-provenance.json")" \
+    --arg resolvedDigest "$(jq -r '.images[] | select(.role == "runtimeCUDA").resolvedDigest' \
+      "${evidence_dir}/image-provenance.json")"
   assert_json workload.json "immutable one-replica restricted CUDA workload" '
     .metadata.name == $name and .metadata.uid == $uid and
     .spec.replicas == 1 and .spec.strategy.type == "Recreate" and

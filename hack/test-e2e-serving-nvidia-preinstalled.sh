@@ -16,9 +16,16 @@ cp "${repo_root}/VERSION" "${fixture_root}/VERSION"
 cp "${repo_root}/hack/versions.mk" "${fixture_root}/hack/versions.mk"
 cp "${repo_root}/hack/test-e2e-serving-nvidia.sh" \
   "${fixture_root}/hack/test-e2e-serving-nvidia.sh"
+cp "${repo_root}/hack/m2-nvidia-image-identity.jq" \
+  "${fixture_root}/hack/m2-nvidia-image-identity.jq"
 if grep -Eq '^[[:space:]]*return[[:space:]]*$' \
   "${fixture_root}/hack/test-e2e-serving-nvidia.sh"; then
   echo "NVIDIA harness functions must use explicit return statuses for Bash 5.2 EXIT-trap safety" >&2
+  exit 1
+fi
+if grep -Fq '/usr/local/cuda/version.json' \
+  "${fixture_root}/hack/test-e2e-serving-nvidia.sh"; then
+  echo "NVIDIA harness must not require optional CUDA version.json metadata" >&2
   exit 1
 fi
 cp "${repo_root}/test/e2e/serving/nvidia-storage.yaml.tmpl" \
@@ -40,18 +47,54 @@ exit 95
 HELM_PACKAGE
 
 mock_commit="dddddddddddddddddddddddddddddddddddddddd"
-mock_parent_digest="sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-mock_child_digest="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-mock_config_digest="sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+llama_commit="$(awk '$1 == "LLAMA_CPP_COMMIT" {print $3}' "${repo_root}/hack/versions.mk")"
+llama_build_number="$(awk '$1 == "LLAMA_CPP_BUILD_NUMBER" {print $3}' "${repo_root}/hack/versions.mk")"
+llama_source_sha256="$(awk '$1 == "LLAMA_CPP_SOURCE_SHA256" {print $3}' "${repo_root}/hack/versions.mk")"
+mock_config_json="$(jq -cn \
+  --arg revision "${mock_commit}" \
+  --arg llamaCommit "${llama_commit}" \
+  --arg llamaBuildNumber "${llama_build_number}" \
+  --arg llamaSourceSHA256 "${llama_source_sha256}" '{
+    architecture: "amd64",
+    os: "linux",
+    config: {Labels: {
+      "org.opencontainers.image.source": "https://github.com/TannerBurns/kama",
+      "org.opencontainers.image.revision": $revision,
+      "io.kama.llama.cpp.commit": $llamaCommit,
+      "io.kama.llama.cpp.build-number": $llamaBuildNumber,
+      "io.kama.llama.cpp.source-sha256": $llamaSourceSHA256,
+      "io.kama.cuda.version": "12.4.1"
+    }}
+  }')"
+mock_config_digest="sha256:$(printf '%s\n' "${mock_config_json}" | sha256sum | awk '{print $1}')"
+mock_child_manifest_json="$(jq -cn --arg digest "${mock_config_digest}" \
+  '{schemaVersion: 2, config: {digest: $digest}}')"
+mock_child_digest="sha256:$(printf '%s\n' "${mock_child_manifest_json}" | sha256sum | awk '{print $1}')"
+mock_parent_manifest_json="$(jq -cn --arg digest "${mock_child_digest}" '{
+  schemaVersion: 2,
+  manifests: [{
+    digest: $digest,
+    platform: {os: "linux", architecture: "amd64"}
+  }]
+}')"
+mock_parent_digest="sha256:$(printf '%s\n' "${mock_parent_manifest_json}" | sha256sum | awk '{print $1}')"
+mock_duplicate_parent_manifest_json="$(jq -cn --arg digest "${mock_child_digest}" '{
+  schemaVersion: 2,
+  manifests: [{
+    digest: $digest,
+    platform: {os: "linux", architecture: "amd64"}
+  }, {
+    digest: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    platform: {os: "linux", architecture: "amd64"}
+  }]
+}')"
+mock_duplicate_parent_digest="sha256:$(printf '%s\n' "${mock_duplicate_parent_manifest_json}" | sha256sum | awk '{print $1}')"
 mock_unrelated_digest="sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 manager_image="ghcr.io/tannerburns/kama-manager@${mock_parent_digest}"
 importer_image="ghcr.io/tannerburns/kama-importer@${mock_parent_digest}"
 fixtures_image="ghcr.io/tannerburns/kama-test-fixtures@${mock_parent_digest}"
 runtime_cpu_image="ghcr.io/tannerburns/kama-runtime-cpu@${mock_parent_digest}"
 runtime_cuda_image="ghcr.io/tannerburns/kama-runtime-cuda@${mock_parent_digest}"
-llama_commit="$(awk '$1 == "LLAMA_CPP_COMMIT" {print $3}' "${repo_root}/hack/versions.mk")"
-llama_build_number="$(awk '$1 == "LLAMA_CPP_BUILD_NUMBER" {print $3}' "${repo_root}/hack/versions.mk")"
-llama_source_sha256="$(awk '$1 == "LLAMA_CPP_SOURCE_SHA256" {print $3}' "${repo_root}/hack/versions.mk")"
 runtime_class="vendor-gpu.example"
 
 install -m 0755 /dev/stdin "${mock_bin}/mock-tool" <<'MOCK_TOOL'
@@ -119,14 +162,24 @@ case "${tool}" in
     request=""
     payload=""
     url=""
+    output=""
+    follow_location=0
     while [[ $# -gt 0 ]]; do
       case "$1" in
+        --location)
+          follow_location=1
+          shift
+          ;;
         --request)
           request=$2
           shift 2
           ;;
         --data-binary)
           payload=$2
+          shift 2
+          ;;
+        --output)
+          output=$2
           shift 2
           ;;
         http://* | https://*)
@@ -138,6 +191,14 @@ case "${tool}" in
           ;;
       esac
     done
+    emit_mock_response() {
+      local response=$1
+      if [[ -n "${output}" ]]; then
+        printf '%s\n' "${response}" >"${output}"
+      else
+        printf '%s\n' "${response}"
+      fi
+    }
     if [[ "${request}" == "DELETE" ]]; then
       pending="$(<"${MOCK_EVIDENCE_DIR}/outcome.txt")"
       qualifying="$(jq -r '.qualifying' "${MOCK_EVIDENCE_DIR}/qualification.json")"
@@ -152,42 +213,31 @@ case "${tool}" in
         : >"${MOCK_STATE_DIR}/namespace-deleted"
       fi
     elif [[ "${url}" == "https://ghcr.io/token" ]]; then
-      printf '{"token":"mock-token"}\n'
+      emit_mock_response '{"token":"mock-token"}'
     elif [[ "${url}" == *"/manifests/${MOCK_PARENT_DIGEST}" ]]; then
-      jq -cn --arg digest "${MOCK_CHILD_DIGEST}" '{
-        schemaVersion: 2,
-        manifests: [{
-          digest: $digest,
-          platform: {os: "linux", architecture: "amd64"}
-        }]
-      }'
+      response="${MOCK_PARENT_MANIFEST_JSON}"
+      if [[ "${MOCK_SCENARIO}" == "duplicate-amd64-manifest" ]]; then
+        response="${MOCK_DUPLICATE_PARENT_MANIFEST_JSON}"
+      elif [[ "${MOCK_SCENARIO}" == "corrupt-parent-manifest" ]]; then
+        response="$(jq -c '.corrupted = true' <<<"${response}")"
+      fi
+      emit_mock_response "${response}"
     elif [[ "${url}" == *"/manifests/${MOCK_CHILD_DIGEST}" ]]; then
-      jq -cn --arg digest "${MOCK_CONFIG_DIGEST}" \
-        '{schemaVersion: 2, config: {digest: $digest}}'
+      response="${MOCK_CHILD_MANIFEST_JSON}"
+      if [[ "${MOCK_SCENARIO}" == "corrupt-child-manifest" ]]; then
+        response="$(jq -c '.corrupted = true' <<<"${response}")"
+      fi
+      emit_mock_response "${response}"
     elif [[ "${url}" == *"/blobs/${MOCK_CONFIG_DIGEST}" ]]; then
-      jq -cn \
-        --arg url "${url}" \
-        --arg revision "${MOCK_COMMIT}" \
-        --arg llamaCommit "${MOCK_LLAMA_COMMIT}" \
-        --arg llamaBuildNumber "${MOCK_LLAMA_BUILD_NUMBER}" \
-        --arg llamaSourceSHA256 "${MOCK_LLAMA_SOURCE_SHA256}" '
-        {
-          "org.opencontainers.image.source": "https://github.com/TannerBurns/kama",
-          "org.opencontainers.image.revision": $revision
-        } as $base |
-        (if ($url | contains("kama-runtime-cpu")) or
-            ($url | contains("kama-runtime-cuda")) then
-          $base + {
-            "io.kama.llama.cpp.commit": $llamaCommit,
-            "io.kama.llama.cpp.build-number": $llamaBuildNumber,
-            "io.kama.llama.cpp.source-sha256": $llamaSourceSHA256
-          }
-        else $base end) as $labels |
-        {config: {Labels:
-          (if ($url | contains("kama-runtime-cuda")) then
-            $labels + {"io.kama.cuda.version": "12.4.1"}
-          else $labels end)
-        }}'
+      if [[ "${MOCK_SCENARIO}" == "owned" && ${follow_location} -ne 1 ]]; then
+        echo "mock GHCR config blob redirect was not followed" >&2
+        exit 47
+      fi
+      response="${MOCK_CONFIG_JSON}"
+      if [[ "${MOCK_SCENARIO}" == "corrupt-config-blob" ]]; then
+        response="$(jq -c '.corrupted = true' <<<"${response}")"
+      fi
+      emit_mock_response "${response}"
     else
       echo "unexpected curl URL: ${url:-unset}" >&2
       exit 92
@@ -510,9 +560,24 @@ case "${tool}" in
       fi
     elif [[ "${arguments}" == *" get modelcache,modelartifact,modeldeployment,deploy,svc,job,pod -o wide "* ]]; then
       printf 'mock resources\n'
-    elif [[ "${arguments}" == *" get deployments.apps,replicasets.apps,services,pods,persistentvolumeclaims,jobs.batch,configmaps,leases.coordination.k8s.io -l "* ]] ||
+    elif [[ "${arguments}" == *"leases.coordination.k8s.io"* ]]; then
+      echo "qualification identity cannot list Leases" >&2
+      exit 77
+    elif [[ "${arguments}" == *" get deployments.apps,replicasets.apps,services,pods,persistentvolumeclaims,jobs.batch,configmaps -l "* ]] ||
       [[ "${arguments}" == *" get endpointslices.discovery.k8s.io -l kubernetes.io/service-name="* ]]; then
-      if [[ "${MOCK_SCENARIO}" == "suite-owned-residual" ]]; then
+      if [[ "${MOCK_SCENARIO}" == "cleanup-list-error" ]]; then
+        exit 78
+      elif [[ "${MOCK_SCENARIO}" == "eventual-cleanup" ]]; then
+        residual_reads=0
+        if [[ -f "${MOCK_STATE_DIR}/residual-reads" ]]; then
+          residual_reads="$(<"${MOCK_STATE_DIR}/residual-reads")"
+        fi
+        residual_reads=$((residual_reads + 1))
+        printf '%s\n' "${residual_reads}" >"${MOCK_STATE_DIR}/residual-reads"
+        if [[ ${residual_reads} -le 2 ]]; then
+          printf 'deployment.apps/terminating-owned-resource\n'
+        fi
+      elif [[ "${MOCK_SCENARIO}" == "suite-owned-residual" ]]; then
         printf 'deployment.apps/residual-owned-resource\n'
       fi
     elif [[ "${arguments}" == *" get pods -l kama.tannerburns.github.io/model-deployment=e2e-serving-nvidia -o json "* ]]; then
@@ -540,7 +605,7 @@ case "${tool}" in
 esac
 MOCK_TOOL
 
-for tool in git kubectl curl cosign helm sleep; do
+for tool in git kubectl curl cosign helm sleep docker crane; do
   ln -s mock-tool "${mock_bin}/${tool}"
 done
 
@@ -651,6 +716,9 @@ run_scenario() {
   MOCK_PARENT_DIGEST="${mock_parent_digest}" \
   MOCK_CHILD_DIGEST="${mock_child_digest}" \
   MOCK_CONFIG_DIGEST="${mock_config_digest}" \
+  MOCK_PARENT_MANIFEST_JSON="${mock_parent_manifest_json}" \
+  MOCK_CHILD_MANIFEST_JSON="${mock_child_manifest_json}" \
+  MOCK_CONFIG_JSON="${mock_config_json}" \
   MOCK_UNRELATED_DIGEST="${mock_unrelated_digest}" \
   MOCK_TEST_NAMESPACE="kama-qualification" \
   MOCK_CONTROLLER_NAMESPACE="${controller_namespace}" \
@@ -725,6 +793,11 @@ run_scenario() {
       return 1
     fi
     return
+  fi
+
+  if grep -Fq 'leases.coordination.k8s.io' "${state_dir}/calls.log"; then
+    echo "${scenario}: cleanup attempted a Lease LIST unavailable to the restricted gate identity" >&2
+    return 1
   fi
   if [[ "${scenario}" == "suite-owned-existing-controller" ]]; then
     assert_no_kubernetes_ownership_mutation "${state_dir}/calls.log"
@@ -976,8 +1049,23 @@ run_scenario() {
     return
   fi
 
+  if [[ "${scenario}" == "cleanup-list-error" ]]; then
+    if ! grep -Fq 'NVIDIA suite cleanup could not inventory gate-owned resources' \
+      "${state_dir}/stderr.log" ||
+      [[ "$(grep -Fc $'kubectl\t-n\tkama-qualification\tget\tdeployments.apps,replicasets.apps,services,pods,persistentvolumeclaims,jobs.batch,configmaps' \
+        "${state_dir}/calls.log")" -ne 2 ]]; then
+      echo "cleanup inventory error was retried or treated as an empty inventory" >&2
+      return 1
+    fi
+    jq -e '
+      .outcome == "FAIL: NVIDIA suite cleanup did not complete safely" and
+      .qualifying == false and .cleanupComplete == false
+    ' "${fixture_root}/dist/e2e/serving-nvidia/qualification.json" >/dev/null
+    return
+  fi
+
   if [[ "${scenario}" == "owned" || "${scenario}" == "owned-default-runtime" ||
-    "${scenario}" == "adopted" ]]; then
+    "${scenario}" == "adopted" || "${scenario}" == "eventual-cleanup" ]]; then
     if ! jq -se '
       length == 2 and
       all(.[];
@@ -1003,6 +1091,36 @@ run_scenario() {
         ! grep -Fq 'storageClassName: mock-csi' "${state_dir}/created-storage.yaml" ||
         grep -Fq 'existingClaim:' "${state_dir}/created-storage.yaml"; then
         echo "default cache manifest no longer selects claimTemplate/Delete exclusively" >&2
+        return 1
+      fi
+      if ! jq -e --arg childDigest "${mock_child_digest}" '
+        (.images | length) == 5 and
+        all(.images[]; .verified == true and
+          .method == "GHCR distribution API (linux/amd64)" and
+          .resolvedDigest == $childDigest)
+      ' "${fixture_root}/dist/e2e/serving-nvidia/image-provenance.json" >/dev/null ||
+        ! awk -F '\t' '
+          $1 == "curl" {
+            blob = 0
+            follow = 0
+            for (i = 2; i <= NF; i++) {
+              if ($i ~ /\/blobs\//) blob = 1
+              if ($i == "--location") follow = 1
+            }
+            if (blob) {
+              blobs++
+              followed += follow
+            }
+          }
+          END {exit(blobs == 5 && followed == 5 ? 0 : 1)}
+        ' "${state_dir}/calls.log" ||
+        grep -Eq '^(docker|crane)[[:space:]]' "${state_dir}/calls.log"; then
+        echo "GHCR redirected config-blob provenance did not stay immutable and amd64-specific" >&2
+        return 1
+      fi
+    elif [[ "${scenario}" == "eventual-cleanup" ]]; then
+      if [[ "$(<"${state_dir}/residual-reads")" -lt 3 ]]; then
+        echo "cleanup did not wait for eventually deleted controller-owned resources" >&2
         return 1
       fi
     elif [[ "${scenario}" == "adopted" ]]; then
@@ -1081,6 +1199,10 @@ test_controller_identity_change() {
     export MOCK_PARENT_DIGEST="${mock_parent_digest}"
     export MOCK_CHILD_DIGEST="${mock_child_digest}"
     export MOCK_CONFIG_DIGEST="${mock_config_digest}"
+    export MOCK_PARENT_MANIFEST_JSON="${mock_parent_manifest_json}"
+    export MOCK_CHILD_MANIFEST_JSON="${mock_child_manifest_json}"
+    export MOCK_CONFIG_JSON="${mock_config_json}"
+    export MOCK_DUPLICATE_PARENT_MANIFEST_JSON="${mock_duplicate_parent_manifest_json}"
     export MOCK_TEST_NAMESPACE="kama-qualification"
     export MOCK_CONTROLLER_NAMESPACE="kama-system"
     export MOCK_CONTROLLER_DEPLOYMENT="kama"
@@ -1135,11 +1257,145 @@ test_controller_identity_change() {
   fi
 }
 
-# The owned case reports the signed parent-index digest, matching K3s/containerd;
-# owned-default-runtime retains coverage for a resolved Linux child digest.
+test_cuda_runtime_evidence_contract() {
+  local state_dir="${test_root}/cuda-runtime-contract"
+  local functions_file="${state_dir}/cuda-functions.sh"
+  local output="${state_dir}/cuda-runtime.json"
+  local packages=$'cuda-cudart-12-4:amd64\t12.4.127-1\nlibcublas-12-4:amd64\t12.4.5.8-1'
+  local linkage=$'libcudart.so.12 => /usr/local/cuda/lib64/libcudart.so.12 (0x1)\nlibcublas.so.12 => /usr/local/cuda/lib64/libcublas.so.12 (0x2)'
+  mkdir -p "${state_dir}"
+  awk '
+    /^write_cuda_runtime_evidence\(\) \{/ {copy = 1}
+    /^verify_image_provenance\(\) \{/ {exit}
+    copy {print}
+  ' "${fixture_root}/hack/test-e2e-serving-nvidia.sh" >"${functions_file}"
+  # shellcheck source=/dev/null
+  source "${functions_file}"
+
+  revision="${mock_commit}"
+  provenance_source="https://github.com/TannerBurns/kama"
+  provenance_revision="${mock_commit}"
+  provenance_cuda_version="12.4.1"
+  provenance_verified=1
+  supply_chain_verified=1
+  runtime_cuda_image="${runtime_cuda_image}"
+  runtime_cuda_observed_digest="${mock_child_digest}"
+  write_cuda_runtime_evidence "12.4.1" "12.4.1" "${packages}" "${linkage}" "${output}"
+  if ! jq -e --arg image "${runtime_cuda_image}" --arg revision "${mock_commit}" '
+    .schemaVersion == 1 and .expectedVersion == "12.4.1" and
+    .declaredVersion == "12.4.1" and .imageLabelVersion == "12.4.1" and
+    .identityVerified == true and .image.signedParentReference == $image and
+    .image.revision == $revision and .image.provenanceVerified == true and
+    .image.signatureAndSBOMVerified == true and
+    (has("observedVersion") | not) and (has("versionMetadata") | not)
+  ' "${output}" >/dev/null; then
+    echo "valid CUDA env/package/linkage/signed-label evidence was rejected" >&2
+    return 1
+  fi
+  if write_cuda_runtime_evidence "12.4.1" "12.4.0" "${packages}" "${linkage}" /dev/null ||
+    write_cuda_runtime_evidence "12.4.1" "12.4.1" \
+      $'cuda-cudart-12-4:amd64\t12.4.127-1' "${linkage}" /dev/null ||
+    write_cuda_runtime_evidence "12.4.1" "12.4.1" "${packages}" \
+      $'libcudart.so.12 => /cuda/libcudart.so.12 (0x1)' /dev/null; then
+    echo "mismatched CUDA env, package inventory, or linkage was accepted" >&2
+    return 1
+  fi
+  provenance_cuda_version="12.4.0"
+  if write_cuda_runtime_evidence "12.4.1" "12.4.1" "${packages}" "${linkage}" /dev/null; then
+    echo "mismatched signed CUDA image label was accepted" >&2
+    return 1
+  fi
+  provenance_cuda_version="12.4.1"
+  provenance_verified=0
+  if write_cuda_runtime_evidence "12.4.1" "12.4.1" "${packages}" "${linkage}" /dev/null; then
+    echo "unverified CUDA image provenance was accepted" >&2
+    return 1
+  fi
+}
+
+test_registry_platform_resolution_contract() {
+  local state_dir="${test_root}/registry-platform-contract"
+  local functions_file="${state_dir}/registry-functions.sh"
+  mkdir -p "${state_dir}"
+  awk '
+    /^verify_downloaded_sha256\(\) \{/ {copy = 1}
+    /^write_cuda_runtime_evidence\(\) \{/ {exit}
+    copy {print}
+  ' "${fixture_root}/hack/test-e2e-serving-nvidia.sh" >"${functions_file}"
+  (
+    set -euo pipefail
+    PATH="${mock_bin}:${PATH}"
+    export PATH
+    export MOCK_DELETE_LOG="${state_dir}/deletes.jsonl"
+    export MOCK_STATE_DIR="${state_dir}"
+    export MOCK_EVIDENCE_DIR="${fixture_root}/dist/e2e/serving-nvidia"
+    export MOCK_COMMIT="${mock_commit}"
+    export MOCK_PARENT_DIGEST="${mock_parent_digest}"
+    export MOCK_CHILD_DIGEST="${mock_child_digest}"
+    export MOCK_CONFIG_DIGEST="${mock_config_digest}"
+    export MOCK_PARENT_MANIFEST_JSON="${mock_parent_manifest_json}"
+    export MOCK_CHILD_MANIFEST_JSON="${mock_child_manifest_json}"
+    export MOCK_CONFIG_JSON="${mock_config_json}"
+    export MOCK_LLAMA_COMMIT="${llama_commit}"
+    export MOCK_LLAMA_BUILD_NUMBER="${llama_build_number}"
+    export MOCK_LLAMA_SOURCE_SHA256="${llama_source_sha256}"
+    tmp_dir="$(mktemp -d "${state_dir}/downloads.XXXXXX")"
+    # shellcheck source=/dev/null
+    source "${functions_file}"
+    for scenario in duplicate-amd64-manifest corrupt-parent-manifest \
+      corrupt-child-manifest corrupt-config-blob; do
+      export MOCK_SCENARIO="${scenario}"
+      export MOCK_CALL_LOG="${state_dir}/calls-${scenario}.log"
+      : >"${MOCK_CALL_LOG}"
+      candidate_image="${runtime_cuda_image}"
+      export MOCK_PARENT_DIGEST="${mock_parent_digest}"
+      export MOCK_PARENT_MANIFEST_JSON="${mock_parent_manifest_json}"
+      if [[ "${scenario}" == "duplicate-amd64-manifest" ]]; then
+        export MOCK_PARENT_DIGEST="${mock_duplicate_parent_digest}"
+        export MOCK_PARENT_MANIFEST_JSON="${mock_duplicate_parent_manifest_json}"
+        candidate_image="${runtime_cuda_image%@*}@${mock_duplicate_parent_digest}"
+      fi
+      if read_image_labels "${candidate_image}" >/dev/null; then
+        echo "${scenario}: invalid or digest-mismatched registry content was accepted" >&2
+        exit 1
+      fi
+    done
+    if grep -Fq "/manifests/${MOCK_CHILD_DIGEST}" \
+      "${state_dir}/calls-duplicate-amd64-manifest.log"; then
+      echo "ambiguous linux/amd64 parent index was followed to a child manifest" >&2
+      exit 1
+    fi
+    if grep -Fq "/manifests/${MOCK_CHILD_DIGEST}" \
+      "${state_dir}/calls-corrupt-parent-manifest.log" ||
+      grep -Fq "/blobs/${MOCK_CONFIG_DIGEST}" \
+        "${state_dir}/calls-corrupt-parent-manifest.log"; then
+      echo "corrupt parent manifest was parsed before its digest was verified" >&2
+      exit 1
+    fi
+    if ! grep -Fq "/manifests/${MOCK_CHILD_DIGEST}" \
+      "${state_dir}/calls-corrupt-child-manifest.log" ||
+      grep -Fq "/blobs/${MOCK_CONFIG_DIGEST}" \
+        "${state_dir}/calls-corrupt-child-manifest.log"; then
+      echo "corrupt child manifest was not rejected before config resolution" >&2
+      exit 1
+    fi
+    if ! grep -Fq "/manifests/${MOCK_CHILD_DIGEST}" \
+      "${state_dir}/calls-corrupt-config-blob.log" ||
+      ! grep -Fq "/blobs/${MOCK_CONFIG_DIGEST}" \
+        "${state_dir}/calls-corrupt-config-blob.log"; then
+      echo "config corruption fixture did not reach the verified parent/child chain" >&2
+      exit 1
+    fi
+  )
+}
+
+# The owned case reports the signed parent-index digest used by some containerd
+# installations; owned-default-runtime covers a resolved Linux child digest.
 run_scenario owned 23
 run_scenario owned-default-runtime 23
 run_scenario adopted 23
+run_scenario eventual-cleanup 23
+run_scenario cleanup-list-error 1
 run_scenario adopted-unsafe-owner 1
 run_scenario adopted-wrong-storage 1
 run_scenario adopted-pv-mismatch 1
@@ -1161,5 +1417,7 @@ run_scenario suite-owned-list-failure 1
 run_scenario invalid-existing-claim-name 2
 run_scenario invalid-keep-resources 2
 test_controller_identity_change
+test_cuda_runtime_evidence_contract
+test_registry_platform_resolution_contract
 
 echo "M2 NVIDIA controller-mode lifecycle regression tests passed"

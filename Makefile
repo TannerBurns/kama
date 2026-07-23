@@ -23,7 +23,9 @@ RUNTIME_CUDA_IMG ?= $(REGISTRY)/kama-runtime-cuda:$(VERSION)
 PLATFORMS ?= linux/amd64,linux/arm64
 RUNTIME_CPU_PLATFORMS ?= linux/amd64,linux/arm64
 RUNTIME_CUDA_PLATFORMS ?= linux/amd64
-RUNTIME_CUDA_ARCHITECTURES ?= 60;61;70;75;80;86;89;90
+# Release default: native SASS for all supported GPUs and PTX only for the
+# newest architecture. CI may narrow this to the single architecture it tests.
+RUNTIME_CUDA_ARCHITECTURES ?= 60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real;90-virtual
 CONTAINER_TOOL ?= docker
 LOCALBIN ?= $(CURDIR)/bin
 DIST ?= $(CURDIR)/dist
@@ -55,9 +57,9 @@ KIND := $(LOCALBIN)/kind
 KUBECTL_LOCAL := $(LOCALBIN)/kubectl
 KUBECTL ?= $(KUBECTL_LOCAL)
 KUBECTL_VERSIONED := $(LOCALBIN)/kubectl-$(KUBECTL_VERSION)-linux-$(KUBECTL_ARCH)
-HELM := $(LOCALBIN)/helm
+HELM ?= $(LOCALBIN)/helm
 SYFT := $(LOCALBIN)/syft
-COSIGN := $(LOCALBIN)/cosign
+COSIGN ?= $(LOCALBIN)/cosign
 
 .PHONY: all
 all: build
