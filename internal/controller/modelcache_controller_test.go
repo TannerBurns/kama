@@ -705,7 +705,7 @@ func TestSuccessfulProbeRetainsEvidenceUntilReadyStatusPersists(t *testing.T) {
 	if err := kubeClient.Create(context.Background(), &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "probe-result", Namespace: cache.Namespace,
-			Labels: map[string]string{"job-name": job.Name, operationIDLabel: operation},
+			Labels: map[string]string{legacyJobNameLabel: job.Name, operationIDLabel: operation},
 			OwnerReferences: []metav1.OwnerReference{{
 				APIVersion: batchv1.SchemeGroupVersion.String(), Kind: "Job", Name: job.Name, UID: job.UID,
 				Controller: &controller,

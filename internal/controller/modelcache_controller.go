@@ -190,21 +190,34 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, request ctrl.Reque
 		return r.updateClaimStatus(ctx, &cache, &claim, &identity, "ReadOnlyCache",
 			"cache claim requires a writable access mode", 0)
 	}
-	if cache.Status.LastProbeTime != nil {
-		age := time.Since(cache.Status.LastProbeTime.Time)
-		if age >= 0 && age < defaultProbeInterval && canPreserveCacheReady(&cache, &claim, identity) {
-			probeResourcesRemain, cleanupErr := r.cleanupCompletedProbeResources(ctx, &cache, &claim)
-			if cleanupErr != nil {
-				return ctrl.Result{}, cleanupErr
-			}
-			if probeResourcesRemain {
-				return ctrl.Result{RequeueAfter: time.Second}, nil
-			}
-			publishReadyModelCacheMetrics(&cache)
-			return ctrl.Result{RequeueAfter: defaultProbeInterval - age}, nil
-		}
+	if result, handled, err := r.reconcileFreshReady(ctx, &cache, &claim, identity); handled {
+		return result, err
 	}
 	return r.reconcileProbe(ctx, &cache, &claim, identity)
+}
+
+func (r *ModelCacheReconciler) reconcileFreshReady(
+	ctx context.Context,
+	cache *kamav1alpha1.ModelCache,
+	claim *corev1.PersistentVolumeClaim,
+	identity volumeIdentity,
+) (ctrl.Result, bool, error) {
+	if cache.Status.LastProbeTime == nil {
+		return ctrl.Result{}, false, nil
+	}
+	age := time.Since(cache.Status.LastProbeTime.Time)
+	if age < 0 || age >= defaultProbeInterval || !canPreserveCacheReady(cache, claim, identity) {
+		return ctrl.Result{}, false, nil
+	}
+	probeResourcesRemain, err := r.cleanupCompletedProbeResources(ctx, cache, claim)
+	if err != nil {
+		return ctrl.Result{}, true, err
+	}
+	if probeResourcesRemain {
+		return ctrl.Result{RequeueAfter: time.Second}, true, nil
+	}
+	publishReadyModelCacheMetrics(cache)
+	return ctrl.Result{RequeueAfter: defaultProbeInterval - age}, true, nil
 }
 
 func (r *ModelCacheReconciler) claimWaitsForFirstConsumer(
