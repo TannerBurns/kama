@@ -13,7 +13,10 @@ FROM docker.io/nvidia/cuda:12.4.1-devel-ubuntu22.04@sha256:da6791294b0b04d7e65d8
 ARG LLAMA_CPP_COMMIT=b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45
 ARG LLAMA_CPP_BUILD_NUMBER=10091
 ARG LLAMA_CPP_SOURCE_SHA256=dfc264daa167c6bbd4318a0e70b86db71c5b3f9fcab85acd1811d94686004b29
-ARG CUDA_ARCHITECTURES=60;61;70;75;80;86;89;90
+# Emit native SASS for every supported GPU and retain forward-compatible PTX
+# only for the newest architecture. The explicit CMake suffixes avoid compiling
+# redundant PTX for each older architecture.
+ARG CUDA_ARCHITECTURES=60-real;61-real;70-real;75-real;80-real;86-real;89-real;90-real;90-virtual
 ARG BUILD_JOBS=2
 ARG SOURCE_DATE_EPOCH=0
 

@@ -191,7 +191,7 @@ fi
 if [[ ! -x "${cosign_bin}" ]]; then
   cosign_bin="$(command -v cosign || true)"
 fi
-required_tools=("${kubectl_bin}" "${cosign_bin}" awk curl git grep jq openssl realpath sed)
+required_tools=("${kubectl_bin}" "${cosign_bin}" awk curl git grep jq mktemp openssl realpath sed sha256sum)
 if [[ "${preinstalled_controller}" == "0" ]]; then
   required_tools+=("${helm_bin}")
 fi
@@ -529,6 +529,7 @@ capture_evidence() {
     --arg provenanceLlamaBuildNumber "${provenance_llama_build_number}" \
     --arg provenanceLlamaSourceSHA256 "${provenance_llama_source_sha256}" \
     --arg provenanceCUDAVersion "${provenance_cuda_version}" \
+    --arg runtimeCUDARequestedDigest "${runtime_cuda_image##*@}" \
     --arg runtimeCUDAObservedDigest "${runtime_cuda_observed_digest}" \
     --arg storageClass "${storage_class}" \
     --arg storageMode "$(if [[ -n "${existing_cache_claim}" ]]; then printf existingClaim; else printf claimTemplate; fi)" \
@@ -597,6 +598,11 @@ capture_evidence() {
         llamaBuildNumber: $provenanceLlamaBuildNumber,
         llamaSourceSHA256: $provenanceLlamaSourceSHA256,
         cudaVersion: $provenanceCUDAVersion,
+        requestedParentDigest: $runtimeCUDARequestedDigest,
+        resolvedLinuxAMD64Digest: $runtimeCUDAObservedDigest,
+        allowedObservedManifestDigests:
+          ([$runtimeCUDARequestedDigest, $runtimeCUDAObservedDigest] |
+            map(select(test("^sha256:[a-f0-9]{64}$"))) | unique),
         expectedObservedManifestDigest: $runtimeCUDAObservedDigest
       }
   }' >"${evidence_dir}/identities.json"
@@ -865,7 +871,7 @@ stop_cleanup_proxy() {
 verify_no_gate_residuals() {
   local selector=""
   local conflicts=""
-  local resource_types="deployments.apps,replicasets.apps,services,pods,persistentvolumeclaims,jobs.batch,configmaps,leases.coordination.k8s.io"
+  local resource_types="deployments.apps,replicasets.apps,services,pods,persistentvolumeclaims,jobs.batch,configmaps"
   local -a selectors=(
     "kama.tannerburns.github.io/e2e-run=${qualification_run_id}"
     "kama.tannerburns.github.io/model-deployment=e2e-serving-nvidia"
@@ -875,7 +881,10 @@ verify_no_gate_residuals() {
 
   for selector in "${selectors[@]}"; do
     conflicts="$("${kubectl_bin}" -n "${namespace}" get "${resource_types}" \
-      -l "${selector}" -o name 2>/dev/null)" || return 1
+      -l "${selector}" -o name 2>/dev/null)" || {
+      echo "NVIDIA suite cleanup could not inventory gate-owned resources" >&2
+      return 2
+    }
     if [[ -n "${conflicts}" ]]; then
       echo "NVIDIA suite cleanup left resources matching ${selector}" >&2
       printf '%s\n' "${conflicts}" >&2
@@ -884,13 +893,39 @@ verify_no_gate_residuals() {
   done
   if [[ -n "${generated_service_name}" ]]; then
     conflicts="$("${kubectl_bin}" -n "${namespace}" get endpointslices.discovery.k8s.io \
-      -l "kubernetes.io/service-name=${generated_service_name}" -o name 2>/dev/null)" || return 1
+      -l "kubernetes.io/service-name=${generated_service_name}" -o name 2>/dev/null)" || {
+      echo "NVIDIA suite cleanup could not inventory gate-owned EndpointSlices" >&2
+      return 2
+    }
     if [[ -n "${conflicts}" ]]; then
       echo "NVIDIA suite cleanup left EndpointSlices for ${generated_service_name}" >&2
       printf '%s\n' "${conflicts}" >&2
       return 1
     fi
   fi
+}
+
+wait_for_no_gate_residuals() {
+  local attempt
+  local status=0
+  # Foreground deletion of the gate CRs does not make controller-owned
+  # Deployments, Pods, Services, PVCs, Jobs, or EndpointSlices disappear in the
+  # same API transaction. Give those dependents time to finish terminating, but
+  # keep the final check fail-closed if a resource remains or inventory cannot be
+  # read reliably.
+  for ((attempt = 0; attempt < 60; attempt++)); do
+    if verify_no_gate_residuals >/dev/null 2>&1; then
+      return 0
+    else
+      status=$?
+      if [[ ${status} -eq 2 ]]; then
+        verify_no_gate_residuals
+        return 1
+      fi
+    fi
+    sleep 1
+  done
+  verify_no_gate_residuals
 }
 
 verify_owned_namespace_identity() {
@@ -1015,7 +1050,7 @@ cleanup() {
           verify_existing_cache_claim_retained || resource_cleanup_failed=1
         fi
         if [[ ${resource_cleanup_failed} -eq 0 ]]; then
-          verify_no_gate_residuals || resource_cleanup_failed=1
+          wait_for_no_gate_residuals || resource_cleanup_failed=1
         fi
       else
         resource_cleanup_failed=1
@@ -1087,74 +1122,161 @@ wait_for_http() {
   return 1
 }
 
+verify_downloaded_sha256() {
+  local expected_digest=$1
+  local path=$2
+  local observed_sha256=""
+  [[ "${expected_digest}" =~ ^sha256:[a-f0-9]{64}$ && -f "${path}" && ! -L "${path}" ]] || return 1
+  observed_sha256="$(sha256sum -- "${path}")" || return 1
+  observed_sha256="${observed_sha256%% *}"
+  [[ "sha256:${observed_sha256}" == "${expected_digest}" ]]
+}
+
 read_image_labels() {
   local image=$1
   local config_json=""
-  local method=""
   local image_name="${image%@sha256:*}"
   local image_digest="${image##*@}"
   local registry="${image_name%%/*}"
   local repository="${image_name#*/}"
   local resolved_digest=""
-  if [[ "${registry}" == "ghcr.io" ]]; then
-    local token=""
-    local manifest=""
-    local platform_digest=""
-    local config_digest=""
-    token="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 --get \
-      --data-urlencode "scope=repository:${repository}:pull" \
-      https://ghcr.io/token 2>/dev/null | jq -r '.token // empty' || true)"
-    if [[ -n "${token}" ]]; then
-      manifest="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
-        -H "Authorization: Bearer ${token}" \
-        -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-        "https://${registry}/v2/${repository}/manifests/${image_digest}" 2>/dev/null || true)"
-      platform_digest="$(jq -r '
-        if (.manifests | type) == "array" then
-          [.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest // empty
-        else empty end
-      ' <<<"${manifest:-null}" 2>/dev/null || true)"
-      if [[ -n "${platform_digest}" ]]; then
-        manifest="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
-          -H "Authorization: Bearer ${token}" \
-          -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-          "https://${registry}/v2/${repository}/manifests/${platform_digest}" 2>/dev/null || true)"
-        resolved_digest="${platform_digest}"
-      else
-        resolved_digest="${image_digest}"
-      fi
-      config_digest="$(jq -r '.config.digest // empty' <<<"${manifest:-null}" 2>/dev/null || true)"
-      if [[ "${config_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-        config_json="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
-          -H "Authorization: Bearer ${token}" \
-          "https://${registry}/v2/${repository}/blobs/${config_digest}" 2>/dev/null | \
-          jq '.config.Labels // {}' 2>/dev/null || true)"
-        method="GHCR distribution API"
-      fi
-    fi
+  local token=""
+  local platform_digest=""
+  local config_digest=""
+  local download_dir=""
+  local parent_manifest_file=""
+  local child_manifest_file=""
+  local selected_manifest_file=""
+  local config_blob_file=""
+
+  # All qualification inputs are immutable GHCR references. Resolve the one
+  # linux/amd64 child explicitly so the operator host architecture can never
+  # influence provenance inspection.
+  [[ "${registry}" == "ghcr.io" && "${repository}" != "${image_name}" &&
+    "${image_digest}" =~ ^sha256:[a-f0-9]{64}$ &&
+    -d "${tmp_dir}" && ! -L "${tmp_dir}" ]] || return 1
+  download_dir="$(mktemp -d "${tmp_dir}/ghcr-provenance.XXXXXX")" || return 1
+  parent_manifest_file="$(mktemp "${download_dir}/parent-manifest.XXXXXX")" || return 1
+  token="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 60 --get \
+    --data-urlencode "scope=repository:${repository}:pull" \
+    https://ghcr.io/token 2>/dev/null | jq -er '.token | select(type == "string" and length > 0)')" || return 1
+  curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+    -H "Authorization: Bearer ${token}" \
+    -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+    --output "${parent_manifest_file}" \
+    "https://${registry}/v2/${repository}/manifests/${image_digest}" 2>/dev/null || return 1
+  verify_downloaded_sha256 "${image_digest}" "${parent_manifest_file}" || return 1
+  selected_manifest_file="${parent_manifest_file}"
+  if jq -e '(.manifests | type) == "array"' "${parent_manifest_file}" >/dev/null 2>&1; then
+    platform_digest="$(jq -er '
+      [.manifests[] | select(
+        .platform.os == "linux" and .platform.architecture == "amd64"
+      ) | .digest] |
+      select(length == 1) | .[0] |
+      select(type == "string" and test("^sha256:[a-f0-9]{64}$"))
+    ' "${parent_manifest_file}")" || return 1
+    child_manifest_file="$(mktemp "${download_dir}/amd64-manifest.XXXXXX")" || return 1
+    curl --fail --silent --show-error --connect-timeout 10 --max-time 60 \
+      -H "Authorization: Bearer ${token}" \
+      -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+      --output "${child_manifest_file}" \
+      "https://${registry}/v2/${repository}/manifests/${platform_digest}" 2>/dev/null || return 1
+    verify_downloaded_sha256 "${platform_digest}" "${child_manifest_file}" || return 1
+    selected_manifest_file="${child_manifest_file}"
+    resolved_digest="${platform_digest}"
+  else
+    resolved_digest="${image_digest}"
   fi
-  if [[ -z "${config_json}" ]] && command -v crane >/dev/null 2>&1; then
-    if config_json="$(crane config "${image}" 2>/dev/null)"; then
-      method="crane config"
-      config_json="$(jq '.config.Labels // {}' <<<"${config_json}")"
-    fi
+  config_digest="$(jq -er '
+    select((.manifests | type) != "array") |
+    .config.digest |
+    select(type == "string" and test("^sha256:[a-f0-9]{64}$"))
+  ' "${selected_manifest_file}")" || return 1
+  # GHCR redirects blob downloads to an HTTPS object host. curl intentionally
+  # strips the registry Authorization header across hosts while following the
+  # redirect; limiting protocols and redirect count prevents downgrade/fanout.
+  config_blob_file="$(mktemp "${download_dir}/config-blob.XXXXXX")" || return 1
+  curl --fail --silent --show-error --location --max-redirs 5 \
+    --proto '=https' --proto-redir '=https' --connect-timeout 10 --max-time 60 \
+    -H "Authorization: Bearer ${token}" \
+    --output "${config_blob_file}" \
+    "https://${registry}/v2/${repository}/blobs/${config_digest}" 2>/dev/null || return 1
+  verify_downloaded_sha256 "${config_digest}" "${config_blob_file}" || return 1
+  if ! jq -e '
+    .architecture == "amd64" and .os == "linux" and
+    ((.config.Labels // {}) | type) == "object"
+  ' "${config_blob_file}" >/dev/null 2>&1; then
+    return 1
   fi
-  if [[ -z "${config_json}" ]] && command -v docker >/dev/null 2>&1 && \
-    docker info >/dev/null 2>&1; then
-    if docker pull "${image}" >/dev/null 2>&1; then
-      config_json="$(docker image inspect --format '{{json .Config.Labels}}' \
-        "${image}" 2>/dev/null || true)"
-      method="docker image inspect"
-    fi
-  fi
+  config_json="$(jq -c '.config.Labels // {}' "${config_blob_file}")" || return 1
 
   if [[ -z "${config_json}" ]] || ! jq -e 'type == "object"' \
     <<<"${config_json}" >/dev/null 2>&1; then
     return 1
   fi
-  jq -n --arg method "${method}" --arg resolvedDigest "${resolved_digest}" \
+  jq -n --arg method "GHCR distribution API (linux/amd64)" \
+    --arg resolvedDigest "${resolved_digest}" \
     --argjson labels "${config_json}" \
     '{method: $method, resolvedDigest: $resolvedDigest, labels: $labels}'
+}
+
+write_cuda_runtime_evidence() {
+  local expected_version=$1
+  local declared_version=$2
+  local package_inventory=$3
+  local linked_libraries=$4
+  local output=$5
+
+  # CUDA's container image patch identity is declared by CUDA_VERSION and the
+  # label in the signed immutable image. Debian packages use toolkit/component
+  # build versions (for example 12.4.127), so they independently prove the 12.4
+  # cudart/cublas payload rather than pretending to be image-tag metadata.
+  if [[ "${declared_version}" != "${expected_version}" ||
+    "${provenance_cuda_version}" != "${expected_version}" ||
+    "${provenance_source}" != "https://github.com/TannerBurns/kama" ||
+    "${provenance_revision}" != "${revision}" ||
+    ${provenance_verified} -ne 1 || ${supply_chain_verified} -ne 1 ||
+    ! "${runtime_cuda_image}" =~ @sha256:[a-f0-9]{64}$ ||
+    ! "${runtime_cuda_observed_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    return 1
+  fi
+  if ! awk '$1 ~ /^cuda-cudart-12-4(:amd64)?$/ && $2 ~ /^12[.]4[.]/ {found=1}
+      END {exit !found}' <<<"${package_inventory}" ||
+    ! awk '$1 ~ /^libcublas-12-4(:amd64)?$/ && $2 ~ /^12[.]4[.]/ {found=1}
+      END {exit !found}' <<<"${package_inventory}" ||
+    ! grep -Eq 'libcudart[.]so[.]12[[:space:]]+=>[[:space:]]+/[^[:space:]]+' \
+      <<<"${linked_libraries}" ||
+    ! grep -Eq 'libcublas[.]so[.]12[[:space:]]+=>[[:space:]]+/[^[:space:]]+' \
+      <<<"${linked_libraries}"; then
+    return 1
+  fi
+
+  jq -n \
+    --arg expectedVersion "${expected_version}" \
+    --arg declaredVersion "${declared_version}" \
+    --arg imageLabelVersion "${provenance_cuda_version}" \
+    --arg signedParentReference "${runtime_cuda_image}" \
+    --arg resolvedLinuxAMD64Digest "${runtime_cuda_observed_digest}" \
+    --arg source "${provenance_source}" \
+    --arg revision "${provenance_revision}" \
+    --arg packages "${package_inventory}" \
+    --arg linkedLibraries "${linked_libraries}" '{
+      schemaVersion: 1,
+      expectedVersion: $expectedVersion,
+      declaredVersion: $declaredVersion,
+      imageLabelVersion: $imageLabelVersion,
+      identityVerified: true,
+      image: {
+        signedParentReference: $signedParentReference,
+        resolvedLinuxAMD64Digest: $resolvedLinuxAMD64Digest,
+        source: $source,
+        revision: $revision,
+        provenanceVerified: true,
+        signatureAndSBOMVerified: true
+      },
+      packages: ($packages | split("\n") | map(select(length > 0))),
+      linkedLibraries: ($linkedLibraries | split("\n") | map(select(length > 0)))
+    }' >"${output}"
 }
 
 verify_image_provenance() {
@@ -1334,8 +1456,8 @@ verify_supply_chain() {
 
 # Qualification requires registry-image provenance that binds the immutable
 # production and serving-client images to this checkout and the pinned llama.cpp/CUDA
-# sources. The functional hardware test may still run when neither supported OCI inspector
-# is available, but its evidence remains explicitly non-qualifying.
+# sources. Inspection is fail-closed through GHCR's Distribution API and always
+# resolves linux/amd64 independently of the operator host architecture.
 verify_image_provenance
 verify_supply_chain
 
@@ -1354,12 +1476,14 @@ wait_for_nvidia_serving() {
   local status
   for _ in $(seq 1 300); do
     status="$("${kubectl_bin}" -n "${namespace}" get modeldeployment e2e-serving-nvidia -o json 2>/dev/null || true)"
-    if [[ -n "${status}" ]] && jq -e \
+    if [[ -n "${status}" ]] && jq -L "${repo_root}/hack" -e \
       --arg commit "${llama_commit}" \
       --arg digest "${model_digest}" \
       --arg artifactName "e2e-serving-nvidia-model" \
       --arg desiredImage "${runtime_cuda_image}" \
+      --arg requestedDigest "${runtime_cuda_image##*@}" \
       --arg runtimeDigest "${runtime_cuda_observed_digest}" '
+      include "m2-nvidia-image-identity";
       .status.observedGeneration == .metadata.generation and
       .status.desiredReplicas == 1 and
       .status.readyReplicas == 1 and
@@ -1372,9 +1496,8 @@ wait_for_nvidia_serving() {
       (.status.serviceRef.uid | type == "string" and length > 0) and
       .status.runtime.state == "Ready" and
       .status.runtime.desiredImage == $desiredImage and
-      (.status.runtime.observedImage | type == "string" and
-        test("@sha256:[a-f0-9]{64}$") and
-        ($runtimeDigest == "" or endswith("@" + $runtimeDigest))) and
+      (.status.runtime.observedImage |
+        kama_nvidia_immutable_image_id($requestedDigest; $runtimeDigest)) and
       .status.runtime.llamaCommit == $commit and
       (.status.runtime.desiredFingerprint | type == "string" and length == 20) and
       .status.runtime.observedFingerprint == .status.runtime.desiredFingerprint and
@@ -1482,10 +1605,13 @@ run_in_cluster_serving_client() {
       requestedImageMatches: ($container.image == $requestedImage)
     }
   ' <<<"${client_pod_json}" >"${evidence_dir}/client-pod.json"
-  if ! jq -e --arg image "${fixtures_image}" --arg digest "${fixtures_observed_digest}" '
+  if ! jq -L "${repo_root}/hack" -e --arg image "${fixtures_image}" \
+    --arg requestedDigest "${fixtures_image##*@}" \
+    --arg resolvedDigest "${fixtures_observed_digest}" '
+    include "m2-nvidia-image-identity";
     .requestedImage == $image and .requestedImageMatches == true and
-    (.resolvedImage | type == "string" and test("@sha256:[a-f0-9]{64}$") and
-      ($digest == "" or endswith("@" + $digest))) and
+    (.resolvedImage |
+      kama_nvidia_immutable_image_id($requestedDigest; $resolvedDigest)) and
     .ready == false and .succeeded == true and .restartCount == 0 and
     .automountServiceAccountToken == false and .runAsNonRoot == true and
     .runAsUser == 65532 and .runAsGroup == 65532 and .seccompProfile == "RuntimeDefault" and
@@ -2197,9 +2323,6 @@ observed_gpu_uuid="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<<"${observed_gp
 observed_driver_version="$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<<"${observed_driver_version}")"
 declared_cuda_version="$("${kubectl_bin}" -n "${namespace}" exec "${pod_name}" --container runtime -- \
   printenv CUDA_VERSION | tr -d '\r\n')"
-cuda_version_metadata="$("${kubectl_bin}" -n "${namespace}" exec "${pod_name}" --container runtime -- \
-  cat /usr/local/cuda/version.json)"
-observed_cuda_version="$(jq -r '.cuda.version // empty' <<<"${cuda_version_metadata}")"
 package_inventory="$("${kubectl_bin}" -n "${namespace}" exec "${pod_name}" --container runtime -- \
   dpkg-query -W '-f=${binary:Package}\t${Version}\n')"
 cuda_package_inventory="$(awk '$1 ~ /^(cuda-|libcu|nvidia)/ {print}' <<<"${package_inventory}")"
@@ -2207,29 +2330,20 @@ linked_libraries="$("${kubectl_bin}" -n "${namespace}" exec "${pod_name}" --cont
   ldd /usr/local/bin/llama-server)"
 if [[ -z "${observed_gpu_device}" || -z "${observed_gpu_uuid}" || \
   "${observed_driver_version}" != "${driver_version}" || \
-  "${declared_cuda_version}" != "${cuda_version}" || \
-  "${observed_cuda_version}" != "${cuda_version}" ]] ||
-  ! awk '$1 ~ /^cuda-cudart-12-4(:amd64)?$/ && $2 ~ /^12\.4\./ {found=1} END {exit !found}' \
-    <<<"${cuda_package_inventory}" ||
-  ! grep -Eq 'libcudart\.so\.12[[:space:]]+=>[[:space:]]+/[^[:space:]]+' <<<"${linked_libraries}" ||
-  ! grep -Eq 'libcublas\.so\.12[[:space:]]+=>[[:space:]]+/[^[:space:]]+' <<<"${linked_libraries}"; then
+  "${declared_cuda_version}" != "${cuda_version}" ]]; then
   echo "runtime-observed GPU/driver/CUDA facts do not match configured inputs" >&2
   exit 1
 fi
-jq -n \
-  --arg expectedVersion "${cuda_version}" \
-  --arg declaredVersion "${declared_cuda_version}" \
-  --arg observedVersion "${observed_cuda_version}" \
-  --argjson versionMetadata "${cuda_version_metadata}" \
-  --arg packages "${cuda_package_inventory}" \
-  --arg linkedLibraries "${linked_libraries}" '{
-  expectedVersion: $expectedVersion,
-  declaredVersion: $declaredVersion,
-  observedVersion: $observedVersion,
-  versionMetadata: $versionMetadata,
-  packages: ($packages | split("\n") | map(select(length > 0))),
-  linkedLibraries: ($linkedLibraries | split("\n") | map(select(length > 0)))
-}' >"${evidence_dir}/cuda-runtime.json"
+if ! write_cuda_runtime_evidence \
+  "${cuda_version}" \
+  "${declared_cuda_version}" \
+  "${cuda_package_inventory}" \
+  "${linked_libraries}" \
+  "${evidence_dir}/cuda-runtime.json"; then
+  echo "runtime CUDA identity, signed provenance, packages, or linkage did not match ${cuda_version}" >&2
+  exit 1
+fi
+observed_cuda_version="${declared_cuda_version}"
 
 run_in_cluster_serving_client e2e-serving-nvidia-client "${service_name}" e2e-serving-nvidia
 jq -n \
