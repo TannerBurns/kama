@@ -46,6 +46,7 @@ model_revision="593b5a2e04c8f3e4ee880263f93e0bd2901ad47f"
 model_size=386404992
 nvidia_service_contract="$(<"${repo_root}/hack/m2-nvidia-service-contract.jq")"
 nvidia_storage_contract="$(<"${repo_root}/hack/m2-nvidia-storage-contract.jq")"
+nvidia_pod_contract="$(<"${repo_root}/hack/m2-nvidia-pod-contract.jq")"
 
 require_file() {
   local path="${evidence_dir}/$1"
@@ -616,19 +617,9 @@ verify_nvidia() {
     --arg fingerprint "$(jq -r '.status.runtime.desiredFingerprint' "${evidence_dir}/modeldeployment.json")" \
     --arg image "$(jq -r '.images.runtimeCUDA' "${evidence_dir}/identities.json")" \
     --arg runtimeClass "$(jq -r '.nvidia.expectedRuntimeClassName' "${evidence_dir}/identities.json")"
-  assert_json pods.json "single ready current NVIDIA Pod with no restart" '
-    (.items | length) == 1 and .items[0] as $pod |
-    ($pod.metadata.uid | type == "string" and length > 0) and
-    ($pod.spec.nodeName | type == "string" and length > 0) and
-    (if $runtimeClass == "" then
-      $pod.spec.runtimeClassName == null
-    else
-      $pod.spec.runtimeClassName == $runtimeClass
-    end) and
-    any($pod.status.conditions[]; .type == "Ready" and .status == "True") and
-    any($pod.status.containerStatuses[]; .name == "runtime" and .ready == true and
-      .restartCount == 0 and .imageID == $image)
-  ' --arg image "$(jq -r '.status.runtime.observedImage' "${evidence_dir}/modeldeployment.json")" \
+  assert_json pods.json "single ready current NVIDIA Pod with no restart" \
+    "${nvidia_pod_contract}" \
+    --arg image "$(jq -r '.status.runtime.observedImage' "${evidence_dir}/modeldeployment.json")" \
     --arg runtimeClass "$(jq -r '.nvidia.expectedRuntimeClassName' "${evidence_dir}/identities.json")"
   assert_json nodes.json "runtime Pod scheduled to the recorded allocatable GPU node" '
     any(.items[]; .name == $node and ((.gpuCount // "0") | tonumber) > 0 and
