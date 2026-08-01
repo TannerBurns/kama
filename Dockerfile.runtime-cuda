@@ -8,7 +8,7 @@
 
 FROM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS apt-tls
 
-FROM docker.io/nvidia/cuda:12.4.1-devel-ubuntu22.04@sha256:da6791294b0b04d7e65d87b7451d6f2390b4d36225ab0701ee7dfec5769829f5 AS llama-builder
+FROM docker.io/nvidia/cuda:13.3.1-devel-ubuntu22.04@sha256:c13e01184a7fb2a90814153fdff2250f08312377887d2673cf5bc769876a37f3 AS llama-builder
 
 ARG LLAMA_CPP_COMMIT=b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45
 ARG LLAMA_CPP_BUILD_NUMBER=10091
@@ -93,7 +93,7 @@ RUN test "${TARGETOS}/${TARGETARCH}" = "linux/amd64" \
         -o /out/kama-runtime-supervisor \
         ./cmd/runtime-supervisor
 
-FROM docker.io/nvidia/cuda:12.4.1-runtime-ubuntu22.04@sha256:517da2300c184c9999ec203c2665244bdebd3578d12fcc7065e83667932643d9
+FROM docker.io/nvidia/cuda:13.3.1-runtime-ubuntu22.04@sha256:6c8e1c94bd76b9a19f5713388da6ef290a734bcc6e96757e8b5b3f32dba9a904
 
 ARG VERSION=dev
 ARG VCS_REF=unknown
