@@ -6,9 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-FROM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS apt-tls
+FROM docker.io/library/golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS apt-tls
 
-FROM docker.io/library/ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 AS llama-builder
+FROM docker.io/library/ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b AS llama-builder
 
 ARG LLAMA_CPP_COMMIT=b4d6c7d8ff69c2e05e4e8ee7e6e710a08abd7b45
 ARG LLAMA_CPP_BUILD_NUMBER=10091
@@ -64,7 +64,7 @@ RUN cmake -S . -B build \
       -DLLAMA_OPENSSL=OFF \
     && cmake --build build --config Release --target llama-server --parallel "${BUILD_JOBS}"
 
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS supervisor-builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc AS supervisor-builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -86,7 +86,7 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" \
       -o /out/kama-runtime-supervisor \
       ./cmd/runtime-supervisor
 
-FROM docker.io/library/ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
+FROM docker.io/library/ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
 
 ARG VERSION=dev
 ARG VCS_REF=unknown
